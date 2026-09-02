@@ -592,12 +592,211 @@ int runMonoNotePriorityRegression()
     std::cout << "Mono note-priority regression passed\n";
     return 0;
 }
+
+// Quantitative oversampled-drive aliasing gate.  The oversampled global
+// saturation stage must genuinely reduce Nyquist-adjacent harmonic energy
+// relative to the 1x path instead of merely sounding different.  Naive
+// Goertzel probes keep this dependency-free and cheap enough for CI.
+int runOversampledDriveAliasingRegression()
+{
+    constexpr double probeSampleRate = 48000.0;
+    constexpr int probeBlockSize = 256;
+    constexpr int droneTotalSamples = 49152;
+    constexpr int analysisStart = 16384;
+    constexpr int analysisLength = 32768;
+    // Exact fold-back lines of the A6 sine drive series.  tanh() creates
+    // only odd harmonics of 1760 Hz; the 15th (26.4 kHz) and 17th (29.92
+    // kHz) exceed the 24 kHz Nyquist limit and land at 21.6 kHz and 18.08
+    // kHz in the 1x path.  Genuine odd harmonics never land on those lines,
+    // and the oversampled path removes both products in its anti-alias
+    // downsampling filter, so these two bins are pure aliasing detectors.
+    constexpr double aliasFoldLines[] { 18080.0 };
+    // 21600 Hz hosts the much stronger 15th-harmonic fold; 18080 Hz is the
+    // weaker 17th-harmonic fold sitting deeper in the anti-alias stopband.
+    constexpr double aliasFoldLinesWide[] { 21600.0, 18080.0 };
+    // Gate: the 4x fold-line power must drop to at most half of the 1x
+    // ratio.  The current DSP measures 0.025 (40x lower), so this leaves
+    // room for legitimate DSP evolution while still catching any regression
+    // that reintroduces host-rate saturation before the oversampler.
+    constexpr double maxOversampledRatio = 0.50;
+
+    const auto configureDroneProbe = [] (EonMiniEEFProcessor& probe)
+    {
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+            {
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+                return true;
+            }
+            return false;
+        };
+        // A pure sine isolates the saturation stage: tanh() then produces
+        // odd harmonics only, so every 1x fold-back above Nyquist is
+        // aliasing while the 4x path must genuinely remove it.
+        // Four phase-aligned pulse oscillators sum to a hot input so the
+        // saturation stage clips deeply, and pulse harmonics decay only
+        // ~1/n so their fold-back products tower above the analyser's
+        // window-leakage floor.
+        return setPlain (ParamIDs::osc1Wave, 1.0f)     // pulse: harmonics ~1/n
+            && setPlain (ParamIDs::osc1Level, 1.0f)
+            && setPlain (ParamIDs::osc2Wave, 1.0f)
+            && setPlain (ParamIDs::osc2Level, 1.0f)
+            && setPlain (ParamIDs::osc3Wave, 1.0f)
+            && setPlain (ParamIDs::osc3Level, 1.0f)
+            && setPlain (ParamIDs::osc4Wave, 1.0f)
+            && setPlain (ParamIDs::osc4Level, 1.0f)
+            && setPlain (ParamIDs::noiseMix, 0.0f)
+            && setPlain (ParamIDs::unisonVoices, 1.0f)
+            && setPlain (ParamIDs::cutoff, 20000.0f)
+            && setPlain (ParamIDs::resonance, 0.0f)
+            && setPlain (ParamIDs::attack, 0.001f)
+            && setPlain (ParamIDs::decay, 0.001f)
+            && setPlain (ParamIDs::sustain, 1.0f)
+            && setPlain (ParamIDs::release, 0.001f)
+            && setPlain (ParamIDs::gain, 0.8f)
+            && setPlain (ParamIDs::drive, 1.0f)
+            && setPlain (ParamIDs::fxWet, 0.0f)
+            && setPlain (ParamIDs::delayFeedback, 0.0f)
+            && setPlain (ParamIDs::chorusMix, 0.0f)
+            && setPlain (ParamIDs::reverbMix, 0.0f)
+            && setPlain (ParamIDs::voiceMode, 1.0f);
+    };
+
+    const auto renderDroneWindow = [probeSampleRate, probeBlockSize] (EonMiniEEFProcessor& probe,
+                                                                     std::array<float, analysisLength>& window)
+    {
+        probe.prepareToPlay (probeSampleRate, probeBlockSize);
+        for (int blockStart = 0; blockStart < droneTotalSamples; blockStart += probeBlockSize)
+        {
+            juce::AudioBuffer<float> buffer (2, probeBlockSize);
+            juce::MidiBuffer midi;
+            // A6 (1760 Hz) makes tanh() harmonics 15+ exceed the 24 kHz
+            // Nyquist limit, so the 1x path folds strong 15th/17th products
+            // back to ~21.6 kHz / ~18.1 kHz while the 4x path removes them
+            // in its downsampling anti-alias filter.  440 Hz cannot show
+            // this because every low-order harmonic stays below Nyquist.
+            if (blockStart == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 93, (juce::uint8) 100), 0);
+            probe.processBlock (buffer, midi);
+            for (int sample = 0; sample < probeBlockSize; ++sample)
+            {
+                const int absoluteSample = blockStart + sample;
+                if (absoluteSample >= analysisStart)
+                    window[static_cast<size_t> (absoluteSample - analysisStart)]
+                        = buffer.getSample (0, sample);
+            }
+        }
+    };
+
+    const auto goertzelMagnitude = [probeSampleRate] (const std::array<float, analysisLength>& window,
+                                                     double frequency)
+    {
+        // A Blackman window suppresses rectangular-window leakage from the
+        // huge neighbouring genuine harmonics (e.g. the 13th at 22880 Hz)
+        // so the fold-line bins only contain true fold-back energy.
+        const double k = juce::MathConstants<double>::twoPi * frequency / probeSampleRate;
+        const double coeff = 2.0 * std::cos (k);
+        double s1 = 0.0, s2 = 0.0;
+        for (const float sample : window)
+        {
+            const size_t index = static_cast<size_t> (&sample - window.data());
+            const double n = static_cast<double> (index);
+            const double bigN = static_cast<double> (window.size());
+            const double blackman = 0.42 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * n / bigN)
+                + 0.08 * std::cos (2.0 * juce::MathConstants<double>::twoPi * n / bigN);
+            const double s0 = static_cast<double> (sample) * blackman + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        return std::sqrt (juce::jmax (0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2))
+               / static_cast<double> (window.size());
+    };
+
+    // Normalise by the untouched 440 Hz fundamental instead of total power:
+    // aliasing itself inflates the 1x total power, which would mask the
+    // problem when using a relative in-band share.  The fundamental passes
+    // both quality paths identically, so this is level-invariant.
+    const auto bandPowerRatio = [&goertzelMagnitude] (const double* foldLines,
+                                                      size_t foldLineCount,
+                                                      const std::array<float, analysisLength>& window)
+    {
+        double highBandPower = 0.0;
+        for (size_t line = 0; line < foldLineCount; ++line)
+        {
+            const double magnitude = goertzelMagnitude (window, foldLines[line]);
+            highBandPower += magnitude * magnitude;
+        }
+        const double fundamentalMagnitude = goertzelMagnitude (window, 1760.0);
+        return highBandPower / juce::jmax (1.0e-12,
+            fundamentalMagnitude * fundamentalMagnitude);
+    };
+
+    EonMiniEEFProcessor bypassProbe, oversampledProbe;
+    if (! configureDroneProbe (bypassProbe) || ! configureDroneProbe (oversampledProbe))
+    {
+        std::cerr << "Oversampled-drive aliasing probe could not configure the drone voice\n";
+        return 1;
+    }
+    if (auto* quality = oversampledProbe.apvts.getParameter (ParamIDs::oversampling))
+        quality->setValueNotifyingHost (quality->convertTo0to1 (2.0f)); // 4x
+
+    std::array<float, analysisLength> bypassWindow {}, oversampledWindow {};
+    renderDroneWindow (bypassProbe, bypassWindow);
+    renderDroneWindow (oversampledProbe, oversampledWindow);
+    // Diagnostic sweep: per-line reduction informs threshold tuning only.
+    for (const double line : aliasFoldLinesWide)
+    {
+        std::cout << "Aliasing fold-line diagnostic: f=" << line
+                  << " 1x=" << goertzelMagnitude (bypassWindow, line)
+                  << " 4x=" << goertzelMagnitude (oversampledWindow, line)
+                  << "\n";
+    }
+    for (const double tone : { 1760.0, 5280.0, 22880.0 })
+    {
+        std::cout << "Genuine harmonic diagnostic: f=" << tone
+                  << " 1x=" << goertzelMagnitude (bypassWindow, tone)
+                  << " 4x=" << goertzelMagnitude (oversampledWindow, tone)
+                  << "\n";
+    }
+
+    for (const float sample : bypassWindow)
+        if (! std::isfinite (sample))
+        {
+            std::cerr << "1x drive drone produced non-finite output\n";
+            return 1;
+        }
+    for (const float sample : oversampledWindow)
+        if (! std::isfinite (sample))
+        {
+            std::cerr << "4x drive drone produced non-finite output\n";
+            return 1;
+        }
+
+    const double bypassRatio = bandPowerRatio (aliasFoldLinesWide, 2, bypassWindow);
+    const double oversampledRatio = bandPowerRatio (aliasFoldLinesWide, 2, oversampledWindow);
+    std::cout << "Oversampled-drive aliasing probe: ratio1x=" << bypassRatio
+              << " ratio4x=" << oversampledRatio
+              << " reduction=" << (bypassRatio > 0.0 ? oversampledRatio / bypassRatio : 0.0)
+              << '\n';
+
+    if (bypassRatio <= 1.0e-9 || oversampledRatio <= 0.0
+        || oversampledRatio >= bypassRatio
+        || oversampledRatio > maxOversampledRatio * bypassRatio)
+    {
+        std::cerr << "Oversampled drive failed to reduce Nyquist-adjacent energy\n";
+        return 1;
+    }
+    return 0;
+}
 }
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     if (runMonoNotePriorityRegression() != 0)
+        return 1;
+    if (runOversampledDriveAliasingRegression() != 0)
         return 1;
     const int contractFailures = runFactoryPresetContractRegression();
 
