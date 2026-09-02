@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-PLUGIN="${1:-${PROJECT_DIR}/Build-Git2/EonMiniEEF_artefacts/Release/VST3/EEF-JP8000.vst3}"
+PLUGIN="${1:-${PROJECT_DIR}/Build/EonMiniEEF_artefacts/Release/VST3/EEF-JP8000.vst3}"
 PLUGINVAL="${PLUGINVAL_BIN:-pluginval}"
 STRICTNESS="${PLUGINVAL_STRICTNESS:-5}"
 
