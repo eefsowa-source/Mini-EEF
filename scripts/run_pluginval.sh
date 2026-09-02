@@ -4,7 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PLUGIN="${1:-${PROJECT_DIR}/Build/EonMiniEEF_artefacts/Release/VST3/EEF-JP8000.vst3}"
-PLUGINVAL="${PLUGINVAL_BIN:-pluginval}"
+PLUGINVAL="${PLUGINVAL_BIN:-}"
+if [[ -z "${PLUGINVAL}" ]]; then
+  if command -v pluginval >/dev/null 2>&1; then
+    PLUGINVAL="pluginval"
+  elif [[ -x "/Applications/pluginval.app/Contents/MacOS/pluginval" ]]; then
+    PLUGINVAL="/Applications/pluginval.app/Contents/MacOS/pluginval"
+  fi
+fi
 STRICTNESS="${PLUGINVAL_STRICTNESS:-5}"
 
 if [[ ! -d "${PLUGIN}" ]]; then
