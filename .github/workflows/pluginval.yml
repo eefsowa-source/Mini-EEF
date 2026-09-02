@@ -1,0 +1,17 @@
+name: VST3 validation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and build
+        run: cmake -B Build -DCMAKE_BUILD_TYPE=Release && cmake --build Build --config Release
+      - name: Install pluginval
+        run: brew install --cask pluginval
+      - name: Validate VST3
+        run: ./scripts/run_pluginval.sh

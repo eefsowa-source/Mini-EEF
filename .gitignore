@@ -1,0 +1,12 @@
+# CMake/JUCE build products
+Build/
+Build-*/
+*_artefacts/
+JuceLibraryCode/
+
+# Local validation and rendered-review outputs
+output/
+.continuity/
+--help/
+*.wav
+eon-mini-eef-ui.png
