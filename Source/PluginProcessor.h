@@ -37,7 +37,12 @@ public:
     float consumePeakLeft() noexcept { return peakLeft.exchange (0.0f); }
     float consumePeakRight() noexcept { return peakRight.exchange (0.0f); }
     float getHostBpm() const noexcept { return hostBpm.load (std::memory_order_relaxed); }
+    // True when the oversampled global stage will handle saturation this
+    // block.  The voice loop reads it to skip its host-rate tanh() so drive
+    // always runs above the host rate when a quality mode is selected.
+    bool oversamplingBypassed() const noexcept { return oversamplingActive.load (std::memory_order_relaxed) == false; }
 private:
+    std::atomic<bool> oversamplingActive { false };
     void processOversampledOutput (juce::AudioBuffer<float>&, float) noexcept;
     std::unique_ptr<juce::Synthesiser> synth;
     double sampleRate = 44100.0;

@@ -556,8 +556,11 @@ public:
             // each voice, so fast cutoff automation and high resonance remain
             // independent across notes.  Limiting the frequency below Nyquist
             // keeps tan() well-conditioned at the top of the range.
+            // Well below Nyquist keeps the tan()-based g coefficient accurate
+            // (at 0.45*Nyquist the bilinear warp already compresses the audible
+            // top octave) while the resonance self-peak stays tame.
             const float safeCutoff = juce::jlimit (20.0f,
-                0.45f * static_cast<float> (sr), modulatedCutoff);
+                juce::jmin (20000.0f, 0.40f * static_cast<float> (sr)), modulatedCutoff);
             const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff
                                       / static_cast<float> (sr));
             const float damping = juce::jlimit (0.08f, 2.0f,
@@ -571,8 +574,12 @@ public:
             for (int channel = 0; channel < channels; ++channel)
             {
                 const float filterInput = stereoInput[static_cast<size_t> (channel)];
-                const float x = driveAmount > 1.0e-5f
-                    ? std::tanh (filterInput * (1.0f + 4.0f * driveAmount))
+                // When the oversampled global stage is active it owns the
+                // saturation; saturating here first would alias at the host
+                // rate before the upsampler can lift the band limit.
+                const float hostRateDrive = p.oversamplingBypassed() ? driveAmount : 0.0f;
+                const float x = hostRateDrive > 1.0e-5f
+                    ? std::tanh (filterInput * (1.0f + 4.0f * hostRateDrive))
                     : filterInput;
                 const size_t index = static_cast<size_t> (channel);
                 const float v1 = (g * (x - svfIc2[index]) + svfIc1[index]) / denominator;
@@ -929,12 +936,14 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
     const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
     const int mode = modeParameter != nullptr
         ? juce::jlimit (0, 2, juce::roundToInt (modeParameter->load())) : 0;
+    const bool willOversample = mode != 0;
+    oversamplingActive.store (willOversample, std::memory_order_relaxed);
 
     // A host may legally deliver a block larger than the prepareToPlay hint.
     // Bypass the optional stage in that case rather than resizing on the audio
     // thread; the normal 1x path remains fully compatible and allocation-free.
     int activeOversamplingLatency = 0;
-    if (mode != 0 && buffer.getNumSamples() > 0
+    if (willOversample && buffer.getNumSamples() > 0
         && buffer.getNumSamples() <= oversamplingBlockSize)
     {
         auto block = juce::dsp::AudioBlock<float> (buffer);
@@ -942,12 +951,15 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         activeOversamplingLatency = juce::roundToInt (oversampler.getLatencyInSamples());
         auto highRateBlock = oversampler.processSamplesUp (block);
 
-        // The voice-level drive is already applied at the host rate.  This
-        // global stage moves the final nonlinear work above the host rate.
+        // The global stage must be the only saturation when oversampling is
+        // active: driving at the host rate first would alias before the
+        // upsampler and defeat the purpose of the quality mode.  The voice
+        // loop skips its tanh() when an oversampled stage will run, and this
+        // stage applies the full drive amount above the host rate.
         const float amount = juce::jlimit (0.0f, 1.0f, driveAmount);
         if (amount > 0.0f)
         {
-            const float gain = 1.0f + 0.75f * amount;
+            const float gain = 1.0f + 4.0f * amount;
             for (size_t channel = 0; channel < highRateBlock.getNumChannels(); ++channel)
             {
                 auto* samples = highRateBlock.getChannelPointer (channel);
