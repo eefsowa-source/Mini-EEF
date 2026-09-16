@@ -91,3 +91,11 @@ target_compile_features(EonMiniEEF_RenderWav PRIVATE cxx_std_20)
 target_compile_definitions(EonMiniEEF_RenderWav PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_include_directories(EonMiniEEF_RenderWav PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
 target_link_libraries(EonMiniEEF_RenderWav PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp juce::juce_audio_formats)
+
+# Roadmap step A: drive-stage THD/harmonic baseline.  Run directly:
+#   ./Build-Git2/EonMiniEEF_ThdProbe
+add_executable(EonMiniEEF_ThdProbe tools/ThdProbe.cpp)
+target_compile_features(EonMiniEEF_ThdProbe PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_ThdProbe PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_ThdProbe PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_ThdProbe PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
