@@ -206,6 +206,9 @@ public:
         const auto* phaseParameter = p.apvts.getRawParameterValue (ParamIDs::unisonPhase);
         const float phaseScale = phaseParameter != nullptr
             ? juce::jlimit (0.0f, 1.0f, phaseParameter->load()) : 1.0f;
+        const auto* driftParameter = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
+        driftLevel = driftParameter != nullptr
+            ? juce::jlimit (0.0f, 1.0f, driftParameter->load()) : 0.0f;
         std::array<float, 4> phaseStart {};
         for (size_t oscillator = 0; oscillator < phaseStart.size(); ++oscillator)
         {
@@ -245,6 +248,21 @@ public:
         noiseState = 0x9e3779b9u ^ (static_cast<std::uint32_t> (midiNote + 1) * 0x85ebca6bu);
         if (noiseState == 0)
             noiseState = 0x6d2b79f5u;
+        // Per-layer drift wanderers restart from the same deterministic seed
+        // chain as the noise source, so offline renders stay reproducible.
+        for (int i = 0; i < maxUnisonVoices; ++i)
+        {
+            driftState[static_cast<size_t> (i)]
+                = noiseState ^ (static_cast<std::uint32_t> (i + 1) * 0x9e3779b9u);
+            if (driftState[static_cast<size_t> (i)] == 0)
+                driftState[static_cast<size_t> (i)] = 0x6d2b79f5u;
+            driftValue[static_cast<size_t> (i)] = 0.0f;
+        }
+        sahState = noiseState ^ 0x19326465u;
+        if (sahState == 0)
+            sahState = 0x6d2b79f5u;
+        previousLfoPhase = lfoPhase;
+        lfoSample = 0.0f;
         updateEnvelopeParameters();
         env.noteOn();
     }
@@ -275,6 +293,10 @@ public:
         ph3.fill (0.0f);
         ph4.fill (0.0f);
         lfoPhase = 0.0f;
+        previousLfoPhase = 0.0f;
+        lfoSample = 0.0f;
+        driftLevel = 0.0f;
+        driftValue.fill (0.0f);
         noiseState = 0x6d2b79f5u;
     }
 
@@ -359,6 +381,8 @@ public:
         auto* velocityAmount = p.apvts.getRawParameterValue (ParamIDs::velocityAmount);
         auto* lfoSync = p.apvts.getRawParameterValue (ParamIDs::lfoSync);
         auto* lfoDivision = p.apvts.getRawParameterValue (ParamIDs::lfoDivision);
+        auto* lfoShape = p.apvts.getRawParameterValue (ParamIDs::lfoShape);
+        auto* unisonDriftParam = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
         auto* keyTracking = p.apvts.getRawParameterValue (ParamIDs::keyTracking);
         std::array<std::atomic<float>*, 4> modSourceParams {}, modDestinationParams {}, modAmountParams {};
         for (int slot = 0; slot < 4; ++slot)
@@ -389,6 +413,10 @@ public:
         const float lfoHz = juce::jlimit (0.01f, 30.0f,
             (lfoSync != nullptr && lfoSync->load() > 0.5f) ? syncedHz : lfoRate->load());
         const float lfoStep = lfoHz / static_cast<float> (sr);
+        const int lfoShapeIndex = lfoShape != nullptr
+            ? juce::jlimit (0, 2, juce::roundToInt (lfoShape->load())) : 0;
+        driftLevel = unisonDriftParam != nullptr
+            ? juce::jlimit (0.0f, 1.0f, unisonDriftParam->load()) : 0.0f;
         const int activeUnisonVoices = juce::jlimit (1, maxUnisonVoices,
             juce::roundToInt (unisonVoicesParam->load()));
         for (int i = 0; i < numSamples; ++i)
@@ -406,7 +434,25 @@ public:
             const float driveAmount = juce::jlimit (0.0f, 1.0f,
                 driveSmooth.getNextValue());
             // A per-voice, never-reset phase gives free-running LFO behaviour.
-            const float lfo = std::sin (juce::MathConstants<float>::twoPi * lfoPhase);
+            // Triangle keeps the sine's free-running phase; sample & hold
+            // draws one bounded random value per LFO cycle so the wander
+            // stays musical instead of noisy.
+            float lfo = 0.0f;
+            if (lfoShapeIndex == 1)
+            {
+                lfo = 2.0f * std::abs (2.0f * lfoPhase - 1.0f) - 1.0f;
+            }
+            else if (lfoShapeIndex == 2)
+            {
+                if (lfoPhase < previousLfoPhase)
+                    lfoSample = -0.8f + 1.6f * unitRandomFromState (sahState);
+                lfo = lfoSample;
+            }
+            else
+            {
+                lfo = std::sin (juce::MathConstants<float>::twoPi * lfoPhase);
+            }
+            previousLfoPhase = lfoPhase;
             lfoPhase = std::fmod (lfoPhase + lfoStep, 1.0f);
             const float envelope = env.getNextSample();
             float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f,
@@ -479,10 +525,17 @@ public:
                 // symmetrically around the played pitch.
                 const float position = static_cast<float> (unison)
                                       - 0.5f * static_cast<float> (activeUnisonVoices - 1);
+                // Deterministic random walk toward +/-1 around the static
+                // detune. One-pole smoothing keeps the motion in the "analog
+                // slow drift" band instead of flutter.
+                const float drift = driftLevel
+                    * driftValue[static_cast<size_t> (unison)];
                 const float cents = activeUnisonVoices > 1
-                    ? position * unisonDetuneCents
-                        / static_cast<float> (activeUnisonVoices - 1) : 0.0f;
-                const float ratio = std::pow (2.0f, cents / 1200.0f);
+                    ? (position + drift * (0.5f + 0.5f * std::abs (position)))
+                        * unisonDetuneCents
+                        / static_cast<float> (activeUnisonVoices - 1)
+                    : drift * driftDetuneFallbackCents;
+                const float ratio = std::pow (2.0f, juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
                 std::array<float, 4> increment {};
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
@@ -540,6 +593,10 @@ public:
                 phase2 = std::fmod (phase2 + increment[1], 1.0f);
                 phase3 = std::fmod (phase3 + increment[2], 1.0f);
                 phase4 = std::fmod (phase4 + increment[3], 1.0f);
+                driftValue[static_cast<size_t> (unison)] += driftLevel
+                    * 0.0003f * (unitRandomFromState (driftState[static_cast<size_t> (unison)]) - 0.5f);
+                driftValue[static_cast<size_t> (unison)] = juce::jlimit (-1.0f, 1.0f,
+                    driftValue[static_cast<size_t> (unison)]);
             }
             const float unisonScale = 1.0f / static_cast<float> (activeUnisonVoices);
             unisonLeft *= unisonScale;
@@ -620,6 +677,18 @@ private:
     int note = 60;
     static constexpr int maxUnisonVoices = 8;
     float vel = 0.0f, lfoPhase = 0.0f;
+    float previousLfoPhase = 0.0f, lfoSample = 0.0f, driftLevel = 0.0f;
+    static constexpr float driftDetuneFallbackCents = 12.0f;
+    std::array<float, maxUnisonVoices> driftValue {};
+    std::array<std::uint32_t, maxUnisonVoices> driftState {};
+    std::uint32_t sahState = 0x6d2b79f5u;
+    static float unitRandomFromState (std::uint32_t& stateValue) noexcept
+    {
+        stateValue ^= stateValue << 13;
+        stateValue ^= stateValue >> 17;
+        stateValue ^= stateValue << 5;
+        return static_cast<float> (stateValue >> 8) / 16777216.0f;
+    }
     std::array<float, 2> state {}, svfIc1 {}, svfIc2 {};
     std::uint32_t noiseState = 0x6d2b79f5u;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
@@ -878,6 +947,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::unisonDetune, 0.0f, 24.0f, 0.0f);
     addFloat (ParamIDs::unisonSpread, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::unisonPhase, 0.0f, 1.0f, 1.0f);
+    addFloat (ParamIDs::unisonDrift, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::cutoff, 20.0f, 20000.0f, 12000.0f);
     addFloat (ParamIDs::resonance, 0.0f, 1.0f, 0.15f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
@@ -902,6 +972,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParamIDs::lfoDivision, "LFO Division",
         juce::StringArray { "4/1", "2/1", "1/1", "1/2", "1/4" }, 2));
+    parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
+        ParamIDs::lfoShape, "LFO Shape",
+        juce::StringArray { "Sine", "Triangle", "Sample & Hold" }, 0));
     addFloat (ParamIDs::keyTracking, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParamIDs::voiceMode, "Voice Mode", juce::StringArray { "Poly", "Mono" }, 0));

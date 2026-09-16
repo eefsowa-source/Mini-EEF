@@ -283,5 +283,82 @@ int main()
         return 1;
     }
     std::cout << "THD drive baseline: PASS\n";
+
+    // Roadmap step C: unison drift must stay deterministic (same seed chain
+    // -> identical offline renders) and bounded; the new LFO shapes must be
+    // finite and bounded as well. Motion quality itself stays a listening
+    // decision; these assertions catch state or range regressions.
+    const auto configureMotionProbe = [] (EonMiniEEFProcessor& probe, int shape,
+                                          float driftAmount)
+    {
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+            {
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+                return true;
+            }
+            return false;
+        };
+        return configureSineProbe (probe, 0.0f)
+            && setPlain (ParamIDs::unisonVoices, 4.0f)
+            && setPlain (ParamIDs::unisonDetune, 18.0f)
+            && setPlain (ParamIDs::unisonSpread, 0.7f)
+            && setPlain (ParamIDs::unisonDrift, driftAmount)
+            && setPlain (ParamIDs::lfoShape, static_cast<float> (shape))
+            && setPlain (ParamIDs::lfoRate, 3.0f);
+    };
+    const auto renderAndPeak = [] (EonMiniEEFProcessor& probe)
+    {
+        std::array<float, analysisLength> window {};
+        renderDroneWindow (probe, window);
+        float peak = 0.0f;
+        bool finite = true;
+        for (const float sample : window)
+        {
+            finite = finite && std::isfinite (sample);
+            peak = juce::jmax (peak, std::abs (sample));
+        }
+        return std::pair<float, bool> { peak, finite };
+    };
+
+    EonMiniEEFProcessor driftProbeA;
+    EonMiniEEFProcessor driftProbeB;
+    const bool driftConfigured = configureMotionProbe (driftProbeA, 0, 1.0f)
+        && configureMotionProbe (driftProbeB, 0, 1.0f);
+    std::array<float, analysisLength> windowA {};
+    std::array<float, analysisLength> windowB {};
+    renderDroneWindow (driftProbeA, windowA);
+    renderDroneWindow (driftProbeB, windowB);
+    float driftDifference = 0.0f;
+    for (size_t index = 0; index < windowA.size(); ++index)
+        driftDifference = juce::jmax (driftDifference,
+            std::abs (windowA[index] - windowB[index]));
+    const auto driftRun = renderAndPeak (driftProbeA);
+    const bool driftDeterministic = driftConfigured && driftDifference == 0.0f;
+    const bool driftBounded = driftRun.second && driftRun.first < 4.0f;
+
+    bool lfoShapesBounded = true;
+    for (int shape = 0; shape < 3; ++shape)
+    {
+        EonMiniEEFProcessor shapeProbe;
+        if (! configureMotionProbe (shapeProbe, shape, 0.0f))
+        {
+            lfoShapesBounded = false;
+            break;
+        }
+        const auto shapeRun = renderAndPeak (shapeProbe);
+        lfoShapesBounded = lfoShapesBounded && shapeRun.second && shapeRun.first < 4.0f;
+    }
+
+    std::cout << "driftDeterministic=" << (driftDeterministic ? "PASS" : "FAIL")
+              << " driftBounded=" << (driftBounded ? "PASS" : "FAIL")
+              << " lfoShapesBounded=" << (lfoShapesBounded ? "PASS" : "FAIL") << "\n";
+    if (! driftDeterministic || ! driftBounded || ! lfoShapesBounded)
+    {
+        std::cerr << "analog motion gate failed\n";
+        return 1;
+    }
+    std::cout << "analog motion (drift/LFO): PASS\n";
     return 0;
 }
