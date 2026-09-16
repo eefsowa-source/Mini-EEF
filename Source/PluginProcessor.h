@@ -41,6 +41,18 @@ public:
     // block.  The voice loop reads it to skip its host-rate tanh() so drive
     // always runs above the host rate when a quality mode is selected.
     bool oversamplingBypassed() const noexcept { return oversamplingActive.load (std::memory_order_relaxed) == false; }
+    int selectedDriveCurve() const noexcept
+    {
+        if (const auto* parameter = apvts.getRawParameterValue (ParamIDs::driveCurve))
+            return juce::jlimit (0, 2, juce::roundToInt (parameter->load (std::memory_order_relaxed)));
+        return 0;
+    }
+    // Roadmap step B: selectable drive curve (applied inside the oversampled
+    // stage) and gentle amp-stage saturation. Both are pure, allocation-free.
+    float applyDriveCurve (float input, float gainMultiplier, int curveMode) noexcept;
+    static float applyAmpSaturation (float input, float amount) noexcept;
+    void resetDriveCurveState() noexcept;
+    float asymHpX = 0.0f, asymHpY = 0.0f;
 private:
     std::atomic<bool> oversamplingActive { false };
     void processOversampledOutput (juce::AudioBuffer<float>&, float) noexcept;

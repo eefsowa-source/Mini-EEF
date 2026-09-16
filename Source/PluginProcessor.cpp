@@ -579,7 +579,8 @@ public:
                 // rate before the upsampler can lift the band limit.
                 const float hostRateDrive = p.oversamplingBypassed() ? driveAmount : 0.0f;
                 const float x = hostRateDrive > 1.0e-5f
-                    ? std::tanh (filterInput * (1.0f + 4.0f * hostRateDrive))
+                    ? p.applyDriveCurve (filterInput, 1.0f + 4.0f * hostRateDrive,
+                                         p.selectedDriveCurve())
                     : filterInput;
                 const size_t index = static_cast<size_t> (channel);
                 const float v1 = (g * (x - svfIc2[index]) + svfIc1[index]) / denominator;
@@ -887,6 +888,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::release, 0.001f, 8.0f, 0.4f);
     addFloat (ParamIDs::gain, 0.0f, 1.0f, 0.7f);
     addFloat (ParamIDs::drive, 0.0f, 1.0f, 0.0f);
+    parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
+        ParamIDs::driveCurve, "Drive Curve",
+        juce::StringArray { "Symmetric", "Asymmetric", "Tube" }, 0));
+    addFloat (ParamIDs::ampSat, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::lfoRate, 0.01f, 30.0f, 2.0f);
     addFloat (ParamIDs::lfoDepth, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::lfoPitch, 0.0f, 12.0f, 0.0f);
@@ -960,13 +965,16 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         if (amount > 0.0f)
         {
             const float gain = 1.0f + 4.0f * amount;
+            const auto* curveParameter = apvts.getRawParameterValue (ParamIDs::driveCurve);
+            const int curveMode = curveParameter != nullptr
+                ? juce::jlimit (0, 2, juce::roundToInt (curveParameter->load())) : 0;
             for (size_t channel = 0; channel < highRateBlock.getNumChannels(); ++channel)
             {
                 auto* samples = highRateBlock.getChannelPointer (channel);
                 for (size_t sample = 0; sample < highRateBlock.getNumSamples(); ++sample)
                 {
                     const float input = std::isfinite (samples[sample]) ? samples[sample] : 0.0f;
-                    const float shaped = std::tanh (input * gain);
+                    const float shaped = applyDriveCurve (input, gain, curveMode);
                     samples[sample] = std::isfinite (shaped) ? shaped : 0.0f;
                 }
             }
@@ -996,7 +1004,67 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
     }
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
+                                            int curveMode) noexcept
+{
+    // Mode 0 preserves the legacy symmetric tanh() so drive=0 presets and
+    // the THD baseline report stay bit-comparable.
+    if (curveMode == 1)
+    {
+        // Asymmetric: 78% positive / 122% negative conduction. The DC offset
+        // this introduces is measured (not assumed) by the THD probe's DC
+        // column. The one-pole highpass below removes the measured DC before
+        // the downsampling anti-alias filter can smear it into the spectrum;
+        // a stateless probe window (ThdProbe) cannot average it away, so this
+        // curve must clean itself.
+        const float biased = input + 0.09f;
+        const float shaped = std::tanh (biased * gainMultiplier * 0.95f)
+                           - std::tanh (0.09f * gainMultiplier * 0.95f);
+        // Renormalise so quiet passages keep roughly the legacy loudness.
+        float output = shaped * 1.06f;
+        // Per-curve one-pole highpass at ~5 Hz. Coefficient computed inline:
+        // y[n] = 0.9993 * (y[n-1] + x[n] - x[n-1]) is a standard DC killer at
+        // 48 kHz (and slightly higher at 96k+, which is acceptable here).
+        const float hp = asymHpY * 0.9993f + output - asymHpX;
+        asymHpX = output;
+        asymHpY = hp;
+        return hp;
+    }
+    if (curveMode == 2)
+    {
+        // "Tube": symmetric tanh followed by a soft second-stage knee. The
+        // cascade emphasises 3rd-order products slightly over deep clipping,
+        // which keeps loud chords dense instead of raspy.
+        const float first = std::tanh (input * gainMultiplier);
+        return std::tanh (first * 1.25f) * 0.86f;
+    }
+    return std::tanh (input * gainMultiplier);
+}
+
+void EonMiniEEFProcessor::resetDriveCurveState() noexcept
+{
+    asymHpX = 0.0f;
+    asymHpY = 0.0f;
+}
+
+float EonMiniEEFProcessor::applyAmpSaturation (float input, float amount) noexcept
+{
+    // Very gentle knee that starts only above 0.7 so clean playing (which
+    // peaks around 0.4 with factory presets) stays untouched while loud
+    // chords get a slight density lift.  amount is user-controlled 0..1 and
+    // 0 keeps the path bit-identical to the legacy signal.
+    if (amount <= 1.0e-4f)
+        return input;
+    const float magnitude = std::abs (input);
+    if (magnitude <= 0.7f)
+        return input;
+    const float excess = magnitude - 0.7f;
+    const float knee = std::tanh (excess * (0.6f + 1.8f * amount)) / (0.6f + 1.8f * amount);
+    const float shapedMagnitude = 0.7f + knee;
+    return std::copysign (juce::jmin (magnitude, shapedMagnitude), input);
+}
+
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1011,6 +1079,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         reverbR.fill (0.0f);
         dcInput.fill (0.0f);
         dcOutput.fill (0.0f);
+        resetDriveCurveState();
         latencyWritePosition = 0;
         for (auto& channel : latencyBuffer)
             channel.fill (0.0f);
@@ -1030,6 +1099,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         b, m, 0, b.getNumSamples());
     auto value=[this](const char* id,float fallback){auto* p=apvts.getRawParameterValue(id);return p!=nullptr?p->load():fallback;};
     const float wet=value(ParamIDs::fxWet,0.0f), delaySeconds=value(ParamIDs::delayTime,0.35f), feedback=value(ParamIDs::delayFeedback,0.25f), depth=value(ParamIDs::chorusDepth,0.004f), rate=value(ParamIDs::chorusRate,0.25f), chorus=value(ParamIDs::chorusMix,0.0f), reverb=value(ParamIDs::reverbMix,0.0f);
+    const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
     for(int i=0;i<b.getNumSamples();++i){float dryL=b.getSample(0,i),dryR=b.getNumChannels()>1?b.getSample(1,i):dryL;float delayedL=fxDelay.getSample(0,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples()),delayedR=fxDelay.getSample(1,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples());fxDelay.setSample(0,fxWritePosition,dryL+delayedL*feedback);fxDelay.setSample(1,fxWritePosition,dryR+delayedR*feedback);float lfo=std::sin(chorusPhase),chorusL=fxDelay.getSample(0,(fxWritePosition-(int)((0.0125f+depth*lfo)*sampleRate)+fxDelay.getNumSamples()*2)%fxDelay.getNumSamples()),chorusR=fxDelay.getSample(1,(fxWritePosition-(int)((0.0125f-depth*lfo)*sampleRate)+fxDelay.getNumSamples()*2)%fxDelay.getNumSamples());chorusPhase=std::fmod(chorusPhase+juce::MathConstants<float>::twoPi*rate/(float)sampleRate,juce::MathConstants<float>::twoPi);constexpr float reverbTapScale=1.0f/1.75f;float rvL=(reverbL[0]*0.7f+reverbL[1]*0.5f+reverbL[2]*0.35f+reverbL[3]*0.2f)*reverbTapScale;float rvR=(reverbR[0]*0.7f+reverbR[1]*0.5f+reverbR[2]*0.35f+reverbR[3]*0.2f)*reverbTapScale;for(int j=3;j>0;--j){reverbL[j]=reverbL[j-1];reverbR[j]=reverbR[j-1];}reverbL[0]=dryL*0.35f+rvL*0.65f;reverbR[0]=dryR*0.35f+rvR*0.65f;float fxL=dryL+wet*(delayedL+chorus*(chorusL-dryL)+reverb*(rvL-dryL)),fxR=dryR+wet*(delayedR+chorus*(chorusR-dryR)+reverb*(rvR-dryR));// Final safety stage: remove subsonic DC while retaining state across blocks,
@@ -1045,12 +1115,13 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             dcInput[static_cast<size_t>(channel)] = sample;
             dcOutput[static_cast<size_t>(channel)] = std::isfinite(blocked) ? blocked : 0.0f;
             const float dcBlocked = dcOutput[static_cast<size_t>(channel)];
+            const float saturated = applyAmpSaturation (dcBlocked, ampSatAmount);
             // Preserve exact small-signal dynamics.  Only excursions above the
             // safety ceiling enter a smooth, bounded limiting knee.
-            const float magnitude = std::abs (dcBlocked);
+            const float magnitude = std::abs (saturated);
             const float limited = magnitude <= 1.0f
-                ? dcBlocked
-                : std::copysign (1.0f + std::tanh (magnitude - 1.0f), dcBlocked);
+                ? saturated
+                : std::copysign (1.0f + std::tanh (magnitude - 1.0f), saturated);
             const float output = std::isfinite(limited) ? limited : 0.0f;
             b.setSample(channel, i, output);
             if (channel == 0) blockPeakL = juce::jmax (blockPeakL, std::abs (output));

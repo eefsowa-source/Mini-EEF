@@ -46,6 +46,11 @@ inline constexpr auto sustain = "sustain";
 inline constexpr auto release = "release";
 inline constexpr auto gain = "gain";
 inline constexpr auto drive = "drive";
+// Roadmap step B: selectable drive curve and gentle amp-stage saturation.
+// Default "Symmetric" is bit-identical to the legacy tanh path so every
+// existing preset keeps its measured baseline.
+inline constexpr auto driveCurve = "driveCurve";
+inline constexpr auto ampSat = "ampSaturation";
 inline constexpr auto lfoRate = "lfoRate";
 inline constexpr auto lfoDepth = "lfoDepth";
 inline constexpr auto lfoPitch = "lfoPitch";

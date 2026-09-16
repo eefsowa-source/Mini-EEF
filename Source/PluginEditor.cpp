@@ -68,6 +68,11 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     oversamplingMode.setColour (juce::ComboBox::textColourId, ivory);
     oversamplingMode.setColour (juce::ComboBox::outlineColourId, edge);
     addAndMakeVisible (oversamplingMode);
+    driveCurveMode.addItemList ({ "SYM", "ASYM", "TUBE" }, 1);
+    driveCurveMode.setColour (juce::ComboBox::backgroundColourId, panel);
+    driveCurveMode.setColour (juce::ComboBox::textColourId, ivory);
+    driveCurveMode.setColour (juce::ComboBox::outlineColourId, edge);
+    addAndMakeVisible (driveCurveMode);
     for (auto* button : { &initButton, &saveButton, &loadButton })
     {
         button->setColour (juce::TextButton::buttonColourId, panel);
@@ -82,6 +87,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     for(auto* c:{&osc1Wave,&osc2Wave,&osc3Wave,&osc4Wave,&voiceMode,&filterMode}){c->setColour(juce::ComboBox::backgroundColourId,panel);c->setColour(juce::ComboBox::textColourId,ivory);c->setColour(juce::ComboBox::outlineColourId,edge);addAndMakeVisible(c);}
     osc1Attachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::osc1Wave,osc1Wave); osc2Attachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::osc2Wave,osc2Wave); osc3Attachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::osc3Wave,osc3Wave); osc4Attachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::osc4Wave,osc4Wave); modeAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::voiceMode,voiceMode); filterModeAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::filterMode,filterMode);
     oversamplingAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::oversampling,oversamplingMode);
+    driveCurveAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts,ParamIDs::driveCurve,driveCurveMode);
     auto bind=[&](juce::Slider& s,const char* id,const juce::String& name){knob(s,name);return std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts,id,s);};
     constexpr std::array<const char*, 4> levelIds { ParamIDs::osc1Level, ParamIDs::osc2Level, ParamIDs::osc3Level, ParamIDs::osc4Level };
     constexpr std::array<const char*, 4> coarseIds { ParamIDs::osc1Coarse, ParamIDs::osc2Coarse, ParamIDs::osc3Coarse, ParamIDs::osc4Coarse };
@@ -98,7 +104,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
         oscPanAttachment[oscillator] = bind (oscPan[oscillator], panIds[oscillator], "PAN");
         oscPulseWidthAttachment[oscillator] = bind (oscPulseWidth[oscillator], pulseWidthIds[oscillator], "PULSE WIDTH");
     }
-    noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF"); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESONANCE"); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT"); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE");
+    noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF"); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESONANCE"); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT"); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE"); ampSatAttachment=bind(ampSaturation,ParamIDs::ampSat,"AMP SAT");
     lfoRateAttachment=bind(lfoRate,ParamIDs::lfoRate,"LFO RATE"); lfoDepthAttachment=bind(lfoDepth,ParamIDs::lfoDepth,"LFO CUTOFF"); lfoPitchAttachment=bind(lfoPitch,ParamIDs::lfoPitch,"LFO PITCH"); velocityAttachment=bind(velocityAmount,ParamIDs::velocityAmount,"VELOCITY");
     fxWetAttachment=bind(fxWet,ParamIDs::fxWet,"FX WET"); delayTimeAttachment=bind(delayTime,ParamIDs::delayTime,"DLY TIME"); delayFeedbackAttachment=bind(delayFeedback,ParamIDs::delayFeedback,"DLY FDBK"); chorusDepthAttachment=bind(chorusDepth,ParamIDs::chorusDepth,"CHO DEPTH"); chorusRateAttachment=bind(chorusRate,ParamIDs::chorusRate,"CHO RATE"); chorusMixAttachment=bind(chorusMix,ParamIDs::chorusMix,"CHO MIX"); reverbMixAttachment=bind(reverbMix,ParamIDs::reverbMix,"REVERB");
     // Keep every physical control visible, but never shrink the panel into the
@@ -365,12 +371,16 @@ void EonMiniEEFEditor::resized()
     x = m + envW + gap + 18;
     const int filterInnerW = juce::jmax (150, filterW - 36), filterGap = 10;
     const int filterKnobW = juce::jlimit (64, 108, (filterInnerW - filterGap) / 2);
-    filterMode.setBounds (x, lowerY + 44, filterInnerW, 26);
-    const int filterSmallW = juce::jmax (52, (filterInnerW - 18) / 4);
+    (void) filterKnobW;
+    const int driveCurveWidth = 74;
+    driveCurveMode.setBounds (x + filterInnerW - driveCurveWidth, lowerY + 8, driveCurveWidth, 24);
+    filterMode.setBounds (x, lowerY + 44, filterInnerW - driveCurveWidth - 8, 26);
+    const int filterSmallW = juce::jmax (44, (filterInnerW - 24) / 5);
     cutoff.setBounds (x, lowerY + 78, filterSmallW, lowerH - 86);
     resonance.setBounds (x + filterSmallW + 6, lowerY + 78, filterSmallW, lowerH - 86);
     gain.setBounds (x + 2 * (filterSmallW + 6), lowerY + 78, filterSmallW, lowerH - 86);
     drive.setBounds (x + 3 * (filterSmallW + 6), lowerY + 78, filterSmallW, lowerH - 86);
+    ampSaturation.setBounds (x + 4 * (filterSmallW + 6), lowerY + 78, filterSmallW, lowerH - 86);
     const int modX = m + envW + filterW + 2 * gap + 18;
     const int modW = w - modX - m - 12;
     x = modX; const int modKnobW = juce::jmax (52, (modW - 24) / 4);
