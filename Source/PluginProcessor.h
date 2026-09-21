@@ -60,8 +60,17 @@ private:
     double sampleRate = 44100.0;
     juce::AudioBuffer<float> fxDelay;
     int fxWritePosition = 0;
+    float delayDampL = 0.0f, delayDampR = 0.0f;
     float chorusPhase = 0.0f; // legacy field kept for state-reset compatibility
-    std::array<float, 4> reverbL {}, reverbR {};
+    static constexpr int reverbCombCount = 4;
+    static constexpr int reverbAllpassCount = 2;
+    static constexpr int reverbMaxDelaySamples = 2048;
+    std::array<std::array<float, reverbMaxDelaySamples>, reverbCombCount> reverbCombL {}, reverbCombR {};
+    std::array<std::array<float, reverbMaxDelaySamples>, reverbAllpassCount> reverbAllpassL {}, reverbAllpassR {};
+    std::array<int, reverbCombCount> reverbCombLengths {}, reverbCombPositions {};
+    std::array<int, reverbAllpassCount> reverbAllpassLengths {};
+    std::array<int, reverbAllpassCount> reverbAllpassPositionsL {}, reverbAllpassPositionsR {};
+    std::array<float, reverbCombCount> reverbCombDampL {}, reverbCombDampR {};
     // Per-channel state for the final DC blocker.  Kept on the processor so
     // state survives block boundaries without any real-time allocation.
     std::array<float, 2> dcInput {}, dcOutput {};
@@ -89,5 +98,7 @@ private:
     std::atomic<bool> dspResetRequested { false };
     std::atomic<float> hostBpm { 120.0f };
     std::atomic<float> peakLeft { 0.0f }, peakRight { 0.0f };
+    void configureReverbDelays() noexcept;
+    void resetReverbState() noexcept;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EonMiniEEFProcessor)
 };

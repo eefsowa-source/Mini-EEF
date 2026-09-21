@@ -76,6 +76,18 @@ namespace
         return filterMode == 1 ? high : filterMode == 2 ? band : low;
     }
 
+    template <size_t Capacity>
+    float processReverbAllpass (float input, std::array<float, Capacity>& buffer,
+                                int& position, int length) noexcept
+    {
+        constexpr float allpassGain = 0.5f;
+        const float delayed = buffer[static_cast<size_t> (position)];
+        const float output = delayed - allpassGain * input;
+        buffer[static_cast<size_t> (position)] = input + allpassGain * output;
+        position = (position + 1) % length;
+        return output;
+    }
+
     // Small allocation-free PRNG for the per-voice white-noise oscillator.
     // The state is owned by EonVoice and is never shared with the UI thread.
     float whiteNoiseSample (std::uint32_t& state) noexcept
@@ -1167,7 +1179,37 @@ float EonMiniEEFProcessor::applyAmpSaturation (float input, float amount) noexce
     return std::copysign (juce::jmin (magnitude, shapedMagnitude), input);
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::configureReverbDelays() noexcept
+{
+    constexpr std::array<int, reverbCombCount> combBase { 149, 211, 263, 293 };
+    constexpr std::array<int, reverbAllpassCount> allpassBase { 31, 47 };
+    const float scale = static_cast<float> (sampleRate / 48000.0);
+    for (int index = 0; index < reverbCombCount; ++index)
+        reverbCombLengths[static_cast<size_t> (index)] = juce::jlimit (1, reverbMaxDelaySamples,
+            juce::roundToInt (combBase[static_cast<size_t> (index)] * scale));
+    for (int index = 0; index < reverbAllpassCount; ++index)
+        reverbAllpassLengths[static_cast<size_t> (index)] = juce::jlimit (1, reverbMaxDelaySamples,
+            juce::roundToInt (allpassBase[static_cast<size_t> (index)] * scale));
+}
+
+void EonMiniEEFProcessor::resetReverbState() noexcept
+{
+    for (auto& line : reverbCombL)
+        line.fill (0.0f);
+    for (auto& line : reverbCombR)
+        line.fill (0.0f);
+    for (auto& line : reverbAllpassL)
+        line.fill (0.0f);
+    for (auto& line : reverbAllpassR)
+        line.fill (0.0f);
+    reverbCombPositions.fill (0);
+    reverbAllpassPositionsL.fill (0);
+    reverbAllpassPositionsR.fill (0);
+    reverbCombDampL.fill (0.0f);
+    reverbCombDampR.fill (0.0f);
+}
+
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1177,6 +1219,9 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         static_cast<NoteOnlySynthesiser*> (synth.get())->resetVoicesNoLock();
         fxDelay.clear();
         fxWritePosition = 0;
+        delayDampL = 0.0f;
+        delayDampR = 0.0f;
+        resetReverbState();
         chorusPhase = 0.0f;
         chorusBufferL.fill (0.0f);
         chorusBufferR.fill (0.0f);
@@ -1191,8 +1236,6 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         resetChorusSmoother (chorusDepthSmooth, ParamIDs::chorusDepth, 0.004f);
         resetChorusSmoother (chorusRateSmooth, ParamIDs::chorusRate, 0.25f);
         resetChorusSmoother (chorusMixSmooth, ParamIDs::chorusMix, 0.0f);
-        reverbL.fill (0.0f);
-        reverbR.fill (0.0f);
         dcInput.fill (0.0f);
         dcOutput.fill (0.0f);
         resetDriveCurveState();
@@ -1221,7 +1264,62 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
-    for(int i=0;i<b.getNumSamples();++i){float dryL=b.getSample(0,i),dryR=b.getNumChannels()>1?b.getSample(1,i):dryL;float delayedL=fxDelay.getSample(0,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples()),delayedR=fxDelay.getSample(1,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples());fxDelay.setSample(0,fxWritePosition,dryL+delayedL*feedback);fxDelay.setSample(1,fxWritePosition,dryR+delayedR*feedback);constexpr float reverbTapScale=1.0f/1.75f;float rvL=(reverbL[0]*0.7f+reverbL[1]*0.5f+reverbL[2]*0.35f+reverbL[3]*0.2f)*reverbTapScale;float rvR=(reverbR[0]*0.7f+reverbR[1]*0.5f+reverbR[2]*0.35f+reverbR[3]*0.2f)*reverbTapScale;for(int j=3;j>0;--j){reverbL[j]=reverbL[j-1];reverbR[j]=reverbR[j-1];}reverbL[0]=dryL*0.35f+rvL*0.65f;reverbR[0]=dryR*0.35f+rvR*0.65f;
+    for (int i = 0; i < b.getNumSamples(); ++i)
+    {
+        const float dryL = b.getSample (0, i);
+        const float dryR = b.getNumChannels() > 1 ? b.getSample (1, i) : dryL;
+        const int delayReadPosition = (fxWritePosition - delayLength + fxDelay.getNumSamples())
+            % fxDelay.getNumSamples();
+        const float delayedL = fxDelay.getSample (0, delayReadPosition);
+        const float delayedR = fxDelay.getSample (1, delayReadPosition);
+
+        // A mild one-pole loss in the feedback loop keeps repeated echoes
+        // from retaining unlimited top-end energy.  The normalized tanh
+        // stage is deliberately small and only acts on the feedback copy.
+        constexpr float delayDamping = 0.45f;
+        delayDampL += delayDamping * (delayedL - delayDampL);
+        delayDampR += delayDamping * (delayedR - delayDampR);
+        const float feedbackDrive = 1.0f + 0.35f * feedback;
+        const float feedbackL = std::tanh (delayDampL * feedbackDrive) / feedbackDrive;
+        const float feedbackR = std::tanh (delayDampR * feedbackDrive) / feedbackDrive;
+        fxDelay.setSample (0, fxWritePosition, dryL + feedbackL * feedback);
+        fxDelay.setSample (1, fxWritePosition, dryR + feedbackR * feedback);
+
+        // Four short damped combs provide the decay field; two allpass stages
+        // diffuse the summed field before it reaches the wet mix.  Delay
+        // lengths are scaled in prepareToPlay so the texture is stable across
+        // sample rates without allocating in this loop.
+        constexpr float combFeedback = 0.78f;
+        constexpr float combDamping = 0.25f;
+        const float reverbInputL = 0.78f * dryL + 0.22f * dryR;
+        const float reverbInputR = 0.78f * dryR + 0.22f * dryL;
+        float combSumL = 0.0f, combSumR = 0.0f;
+        for (int line = 0; line < reverbCombCount; ++line)
+        {
+            const auto index = static_cast<size_t> (line);
+            const int position = reverbCombPositions[index];
+            const float combOutL = reverbCombL[index][static_cast<size_t> (position)];
+            const float combOutR = reverbCombR[index][static_cast<size_t> (position)];
+            reverbCombDampL[index] += combDamping * (combOutL - reverbCombDampL[index]);
+            reverbCombDampR[index] += combDamping * (combOutR - reverbCombDampR[index]);
+            reverbCombL[index][static_cast<size_t> (position)]
+                = reverbInputL + reverbCombDampL[index] * combFeedback;
+            reverbCombR[index][static_cast<size_t> (position)]
+                = reverbInputR + reverbCombDampR[index] * combFeedback;
+            reverbCombPositions[index] = (position + 1) % reverbCombLengths[index];
+            combSumL += combOutL * 0.25f;
+            combSumR += combOutR * 0.25f;
+        }
+        float rvL = processReverbAllpass (combSumL, reverbAllpassL[0],
+            reverbAllpassPositionsL[0], reverbAllpassLengths[0]);
+        rvL = processReverbAllpass (rvL, reverbAllpassL[1],
+            reverbAllpassPositionsL[1], reverbAllpassLengths[1]);
+        float rvR = processReverbAllpass (combSumR, reverbAllpassR[0],
+            reverbAllpassPositionsR[0], reverbAllpassLengths[0]);
+        rvR = processReverbAllpass (rvR, reverbAllpassR[1],
+            reverbAllpassPositionsR[1], reverbAllpassLengths[1]);
+        rvL *= 0.28f;
+        rvR *= 0.28f;
         // Quad-tap Dimension-D-style chorus on a dedicated stereo buffer. Dry
         // stays unity; the wet quad mix rides on top with chorusMix as gain.
         // Four taps share one slow LFO at 0/90/180/270 degrees around a fixed
