@@ -63,6 +63,19 @@ namespace
         }
     }
 
+    float processTptSvf (float input, float g, float damping, float denominator,
+                         int filterMode, float& ic1, float& ic2) noexcept
+    {
+        const float v1 = (g * (input - ic2) + ic1) / denominator;
+        const float v2 = ic2 + g * v1;
+        ic1 = 2.0f * v1 - ic1;
+        ic2 = 2.0f * v2 - ic2;
+        const float low = v2;
+        const float band = v1;
+        const float high = input - damping * band - low;
+        return filterMode == 1 ? high : filterMode == 2 ? band : low;
+    }
+
     // Small allocation-free PRNG for the per-voice white-noise oscillator.
     // The state is owned by EonVoice and is never shared with the UI thread.
     float whiteNoiseSample (std::uint32_t& state) noexcept
@@ -629,11 +642,19 @@ public:
             // top octave) while the resonance self-peak stays tame.
             const float safeCutoff = juce::jlimit (20.0f,
                 juce::jmin (20000.0f, 0.40f * static_cast<float> (sr)), modulatedCutoff);
-            const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff
-                                      / static_cast<float> (sr));
+            const float resonanceAmount = juce::jlimit (0.0f, 1.0f,
+                resonanceSmooth.getNextValue());
             const float damping = juce::jlimit (0.08f, 2.0f,
-                2.0f - 1.92f * juce::jlimit (0.0f, 1.0f,
-                                                resonanceSmooth.getNextValue()));
+                2.0f - 1.92f * resonanceAmount);
+            // The TPT state-variable filter remains at the host rate for the
+            // broad, low-cost region.  Near the top octave or at high Q, two
+            // half-rate updates reduce coefficient warping and resonant edge
+            // error without adding plugin latency or an audio-thread buffer.
+            const bool filterOversample = safeCutoff > 0.28f * static_cast<float> (sr)
+                                       || resonanceAmount > 0.72f;
+            const float filterRate = filterOversample
+                ? 2.0f * static_cast<float> (sr) : static_cast<float> (sr);
+            const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff / filterRate);
             const float denominator = 1.0f + g * (g + damping);
             const int selectedFilter = filterMode != nullptr
                 ? juce::jlimit (0, 2, juce::roundToInt (filterMode->load())) : 0;
@@ -651,14 +672,12 @@ public:
                                          p.selectedDriveCurve())
                     : filterInput;
                 const size_t index = static_cast<size_t> (channel);
-                const float v1 = (g * (x - svfIc2[index]) + svfIc1[index]) / denominator;
-                const float v2 = svfIc2[index] + g * v1;
-                svfIc1[index] = 2.0f * v1 - svfIc1[index];
-                svfIc2[index] = 2.0f * v2 - svfIc2[index];
-                const float low = v2;
-                const float band = v1;
-                const float high = x - damping * band - low;
-                state[index] = selectedFilter == 1 ? high : selectedFilter == 2 ? band : low;
+                float filtered = processTptSvf (x, g, damping, denominator, selectedFilter,
+                                                svfIc1[index], svfIc2[index]);
+                if (filterOversample)
+                    filtered = processTptSvf (x, g, damping, denominator, selectedFilter,
+                                             svfIc1[index], svfIc2[index]);
+                state[index] = filtered;
                 state[index] = std::isfinite (state[index]) ? juce::jlimit (-8.0f, 8.0f, state[index]) : 0.0f;
                 // Filter first, then apply the amp envelope/output gain.  This
                 // preserves the filter's natural ring without feeding envelope
