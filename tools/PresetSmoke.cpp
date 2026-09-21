@@ -800,7 +800,8 @@ int runQuadTapChorusRegression()
     constexpr int probeBlockSize = 128;
     constexpr int totalSamples = 48000;
 
-    const auto renderPass = [probeSampleRate, probeBlockSize] (bool chorusEnabled)
+    const auto renderPass = [probeSampleRate, probeBlockSize] (bool chorusEnabled,
+                                                               bool automate)
     {
         EonMiniEEFProcessor probe;
         const auto setPlain = [&probe] (const char* id, float plainValue)
@@ -838,6 +839,13 @@ int runQuadTapChorusRegression()
             juce::MidiBuffer midi;
             if (blockStart == 0)
                 midi.addEvent (juce::MidiMessage::noteOn (1, 84, (juce::uint8) 100), 0);
+            if (automate && blockStart == totalSamples / 2)
+            {
+                if (! setPlain (ParamIDs::chorusMix, 1.0f)
+                    || ! setPlain (ParamIDs::chorusDepth, 0.012f)
+                    || ! setPlain (ParamIDs::chorusRate, 1.5f))
+                    return std::array<std::array<float, totalSamples>, 2> {};
+            }
             probe.processBlock (buffer, midi);
             for (int sample = 0; sample < probeBlockSize; ++sample)
             {
@@ -848,10 +856,12 @@ int runQuadTapChorusRegression()
         return capture;
     };
 
-    const auto dry = renderPass (false);
-    const auto wet = renderPass (true);
+    const auto dry = renderPass (false, false);
+    const auto wet = renderPass (true, false);
+    const auto automated = renderPass (false, true);
 
     double dryPeak = 0.0, wetPeakL = 0.0, wetPeakR = 0.0, differenceEnergy = 0.0;
+    double preTransitionStep = 0.0, transitionStep = 0.0;
     for (int sample = totalSamples / 2; sample < totalSamples; ++sample)
     {
         const double dryMagnitude = std::max (std::abs (static_cast<double> (dry[0][static_cast<size_t> (sample)])),
@@ -872,13 +882,37 @@ int runQuadTapChorusRegression()
         }
     }
 
+    for (int sample = totalSamples / 2 - 256; sample < totalSamples / 2 + 8; ++sample)
+    {
+        if (! std::isfinite (automated[0][static_cast<size_t> (sample)])
+            || ! std::isfinite (automated[1][static_cast<size_t> (sample)]))
+        {
+            std::cerr << "Quad-tap chorus automation produced non-finite output\n";
+            return 1;
+        }
+        if (sample > 0)
+        {
+            const double step = std::max (
+                std::abs (static_cast<double> (automated[0][static_cast<size_t> (sample)])
+                          - automated[0][static_cast<size_t> (sample - 1)]),
+                std::abs (static_cast<double> (automated[1][static_cast<size_t> (sample)])
+                          - automated[1][static_cast<size_t> (sample - 1)]));
+            if (sample < totalSamples / 2)
+                preTransitionStep = std::max (preTransitionStep, step);
+            else
+                transitionStep = std::max (transitionStep, step);
+        }
+    }
+
     // The chorus must audibly act on the signal (real modulation, not a
     // silent bypass) and stay bounded below clipping.  The wet path is added
     // on top of a unity dry path, so a wet peak above the dry peak is expected;
     // the useful regression bound is a generous relative and absolute ceiling.
     std::cout << "Quad-tap chorus probe: dryPeak=" << dryPeak
               << " wetPeakL=" << wetPeakL << " wetPeakR=" << wetPeakR
-              << " differenceEnergy=" << differenceEnergy << '\n';
+              << " differenceEnergy=" << differenceEnergy
+              << " automationStep=" << transitionStep
+              << " baselineStep=" << preTransitionStep << '\n';
     if (dryPeak <= 1.0e-3 || differenceEnergy <= 1.0e-6)
     {
         std::cerr << "Quad-tap chorus did not modulate the dry signal\n";
@@ -888,6 +922,11 @@ int runQuadTapChorusRegression()
     if (wetPeakL >= chorusPeakLimit || wetPeakR >= chorusPeakLimit)
     {
         std::cerr << "Quad-tap chorus output exceeded its bounded envelope\n";
+        return 1;
+    }
+    if (transitionStep > preTransitionStep + 0.08)
+    {
+        std::cerr << "Quad-tap chorus automation produced a zipper step\n";
         return 1;
     }
     return 0;

@@ -71,6 +71,9 @@ private:
     std::array<float, chorusBufferLength> chorusBufferL {}, chorusBufferR {};
     int chorusWritePosition = 0;
     double chorusLfoPhase = 0.0;
+    // Sample-rate ramps avoid zipper modulation when chorus controls are
+    // automated while keeping the state allocation-free in processBlock.
+    juce::SmoothedValue<float> chorusDepthSmooth, chorusRateSmooth, chorusMixSmooth;
     // Both pipelines are constructed once with their filter state allocated
     // outside the real-time callback.  The parameter only selects between
     // these prepared paths; processBlock never creates or resizes anything.

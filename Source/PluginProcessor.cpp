@@ -25,6 +25,17 @@ namespace
         return 0.0f;
     }
 
+    inline float cubicInterpolate (float y0, float y1, float y2, float y3,
+                                   float fraction) noexcept
+    {
+        // Catmull-Rom form: zero-order phase error at the centre sample and
+        // smooth first derivative across the four-point read window.
+        const float a0 = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+        const float a1 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+        const float a2 = -0.5f * y0 + 0.5f * y2;
+        return ((a0 * fraction + a1) * fraction + a2) * fraction + y1;
+    }
+
     float oscillatorSample (float phase, float increment, int waveform, float pulseWidth)
     {
         phase = phase - std::floor (phase);
@@ -1137,7 +1148,7 @@ float EonMiniEEFProcessor::applyAmpSaturation (float input, float amount) noexce
     return std::copysign (juce::jmin (magnitude, shapedMagnitude), input);
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1152,6 +1163,15 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         chorusBufferR.fill (0.0f);
         chorusWritePosition = 0;
         chorusLfoPhase = 0.0;
+        const auto resetChorusSmoother = [this] (juce::SmoothedValue<float>& smoother,
+                                                  const char* id, float fallback) noexcept
+        {
+            const auto* parameter = apvts.getRawParameterValue (id);
+            smoother.setCurrentAndTargetValue (parameter != nullptr ? parameter->load() : fallback);
+        };
+        resetChorusSmoother (chorusDepthSmooth, ParamIDs::chorusDepth, 0.004f);
+        resetChorusSmoother (chorusRateSmooth, ParamIDs::chorusRate, 0.25f);
+        resetChorusSmoother (chorusMixSmooth, ParamIDs::chorusMix, 0.0f);
         reverbL.fill (0.0f);
         reverbR.fill (0.0f);
         dcInput.fill (0.0f);
@@ -1175,7 +1195,10 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     static_cast<NoteOnlySynthesiser*> (synth.get())->renderNotesOnlyNoLock (
         b, m, 0, b.getNumSamples());
     auto value=[this](const char* id,float fallback){auto* p=apvts.getRawParameterValue(id);return p!=nullptr?p->load():fallback;};
-    const float wet=value(ParamIDs::fxWet,0.0f), delaySeconds=value(ParamIDs::delayTime,0.35f), feedback=value(ParamIDs::delayFeedback,0.25f), depth=value(ParamIDs::chorusDepth,0.004f), rate=value(ParamIDs::chorusRate,0.25f), chorus=value(ParamIDs::chorusMix,0.0f), reverb=value(ParamIDs::reverbMix,0.0f);
+    const float wet=value(ParamIDs::fxWet,0.0f), delaySeconds=value(ParamIDs::delayTime,0.35f), feedback=value(ParamIDs::delayFeedback,0.25f), depthTarget=value(ParamIDs::chorusDepth,0.004f), rateTarget=value(ParamIDs::chorusRate,0.25f), chorusTarget=value(ParamIDs::chorusMix,0.0f), reverb=value(ParamIDs::reverbMix,0.0f);
+    chorusDepthSmooth.setTargetValue (depthTarget);
+    chorusRateSmooth.setTargetValue (rateTarget);
+    chorusMixSmooth.setTargetValue (chorusTarget);
     const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
@@ -1186,8 +1209,11 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         // centre delay, panned with rotating weights like four BBD outputs
         // feeding the original's output network.
         float chorusWetL = 0.0f, chorusWetR = 0.0f;
+        const float chorus = chorusMixSmooth.getNextValue();
         {
             constexpr float chorusCentreSeconds = 0.025f;
+            const float depth = chorusDepthSmooth.getNextValue();
+            const float rate = chorusRateSmooth.getNextValue();
             constexpr float tapWeightsL[4] { 1.0f, 0.8f, 0.6f, 0.4f };
             constexpr float tapWeightsR[4] { 0.4f, 0.6f, 0.8f, 1.0f };
             for (int tap = 0; tap < 4; ++tap)
@@ -1200,12 +1226,16 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
                 const float readPosition = (float) chorusWritePosition - delaySamples;
                 const int index1 = (int) std::floor (readPosition);
                 const float fractional = readPosition - (float) index1;
+                const int wrapped0 = ((index1 - 1) % chorusBufferLength + chorusBufferLength) % chorusBufferLength;
                 const int wrapped1 = ((index1 % chorusBufferLength) + chorusBufferLength) % chorusBufferLength;
                 const int wrapped2 = (wrapped1 + 1) % chorusBufferLength;
-                chorusWetL += tapWeightsL[tap] * (chorusBufferL[(size_t) wrapped1]
-                    + fractional * (chorusBufferL[(size_t) wrapped2] - chorusBufferL[(size_t) wrapped1]));
-                chorusWetR += tapWeightsR[tap] * (chorusBufferR[(size_t) wrapped1]
-                    + fractional * (chorusBufferR[(size_t) wrapped2] - chorusBufferR[(size_t) wrapped1]));
+                const int wrapped3 = (wrapped1 + 2) % chorusBufferLength;
+                chorusWetL += tapWeightsL[tap] * cubicInterpolate (chorusBufferL[(size_t) wrapped0],
+                    chorusBufferL[(size_t) wrapped1], chorusBufferL[(size_t) wrapped2],
+                    chorusBufferL[(size_t) wrapped3], fractional);
+                chorusWetR += tapWeightsR[tap] * cubicInterpolate (chorusBufferR[(size_t) wrapped0],
+                    chorusBufferR[(size_t) wrapped1], chorusBufferR[(size_t) wrapped2],
+                    chorusBufferR[(size_t) wrapped3], fractional);
             }
             chorusWetL *= 1.0f / 2.8f;
             chorusWetR *= 1.0f / 2.8f;
