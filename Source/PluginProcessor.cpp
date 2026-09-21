@@ -1137,7 +1137,7 @@ float EonMiniEEFProcessor::applyAmpSaturation (float input, float amount) noexce
     return std::copysign (juce::jmin (magnitude, shapedMagnitude), input);
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;reverbL.fill(0);reverbR.fill(0);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1148,6 +1148,10 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         fxDelay.clear();
         fxWritePosition = 0;
         chorusPhase = 0.0f;
+        chorusBufferL.fill (0.0f);
+        chorusBufferR.fill (0.0f);
+        chorusWritePosition = 0;
+        chorusLfoPhase = 0.0;
         reverbL.fill (0.0f);
         reverbR.fill (0.0f);
         dcInput.fill (0.0f);
@@ -1175,7 +1179,45 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
-    for(int i=0;i<b.getNumSamples();++i){float dryL=b.getSample(0,i),dryR=b.getNumChannels()>1?b.getSample(1,i):dryL;float delayedL=fxDelay.getSample(0,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples()),delayedR=fxDelay.getSample(1,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples());fxDelay.setSample(0,fxWritePosition,dryL+delayedL*feedback);fxDelay.setSample(1,fxWritePosition,dryR+delayedR*feedback);float lfo=std::sin(chorusPhase),chorusL=fxDelay.getSample(0,(fxWritePosition-(int)((0.0125f+depth*lfo)*sampleRate)+fxDelay.getNumSamples()*2)%fxDelay.getNumSamples()),chorusR=fxDelay.getSample(1,(fxWritePosition-(int)((0.0125f-depth*lfo)*sampleRate)+fxDelay.getNumSamples()*2)%fxDelay.getNumSamples());chorusPhase=std::fmod(chorusPhase+juce::MathConstants<float>::twoPi*rate/(float)sampleRate,juce::MathConstants<float>::twoPi);constexpr float reverbTapScale=1.0f/1.75f;float rvL=(reverbL[0]*0.7f+reverbL[1]*0.5f+reverbL[2]*0.35f+reverbL[3]*0.2f)*reverbTapScale;float rvR=(reverbR[0]*0.7f+reverbR[1]*0.5f+reverbR[2]*0.35f+reverbR[3]*0.2f)*reverbTapScale;for(int j=3;j>0;--j){reverbL[j]=reverbL[j-1];reverbR[j]=reverbR[j-1];}reverbL[0]=dryL*0.35f+rvL*0.65f;reverbR[0]=dryR*0.35f+rvR*0.65f;float fxL=dryL+wet*(delayedL+chorus*(chorusL-dryL)+reverb*(rvL-dryL)),fxR=dryR+wet*(delayedR+chorus*(chorusR-dryR)+reverb*(rvR-dryR));// Final safety stage: remove subsonic DC while retaining state across blocks,
+    for(int i=0;i<b.getNumSamples();++i){float dryL=b.getSample(0,i),dryR=b.getNumChannels()>1?b.getSample(1,i):dryL;float delayedL=fxDelay.getSample(0,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples()),delayedR=fxDelay.getSample(1,(fxWritePosition-delayLength+fxDelay.getNumSamples())%fxDelay.getNumSamples());fxDelay.setSample(0,fxWritePosition,dryL+delayedL*feedback);fxDelay.setSample(1,fxWritePosition,dryR+delayedR*feedback);constexpr float reverbTapScale=1.0f/1.75f;float rvL=(reverbL[0]*0.7f+reverbL[1]*0.5f+reverbL[2]*0.35f+reverbL[3]*0.2f)*reverbTapScale;float rvR=(reverbR[0]*0.7f+reverbR[1]*0.5f+reverbR[2]*0.35f+reverbR[3]*0.2f)*reverbTapScale;for(int j=3;j>0;--j){reverbL[j]=reverbL[j-1];reverbR[j]=reverbR[j-1];}reverbL[0]=dryL*0.35f+rvL*0.65f;reverbR[0]=dryR*0.35f+rvR*0.65f;
+        // Quad-tap Dimension-D-style chorus on a dedicated stereo buffer. Dry
+        // stays unity; the wet quad mix rides on top with chorusMix as gain.
+        // Four taps share one slow LFO at 0/90/180/270 degrees around a fixed
+        // centre delay, panned with rotating weights like four BBD outputs
+        // feeding the original's output network.
+        float chorusWetL = 0.0f, chorusWetR = 0.0f;
+        {
+            constexpr float chorusCentreSeconds = 0.025f;
+            constexpr float tapWeightsL[4] { 1.0f, 0.8f, 0.6f, 0.4f };
+            constexpr float tapWeightsR[4] { 0.4f, 0.6f, 0.8f, 1.0f };
+            for (int tap = 0; tap < 4; ++tap)
+            {
+                const float lfoPhase = chorusLfoPhase
+                    + (float) tap * juce::MathConstants<float>::halfPi;
+                const float delaySamples = juce::jlimit (4.0f,
+                    (float) (chorusBufferLength - 2),
+                    (chorusCentreSeconds + depth * std::sin (lfoPhase)) * (float) sampleRate);
+                const float readPosition = (float) chorusWritePosition - delaySamples;
+                const int index1 = (int) std::floor (readPosition);
+                const float fractional = readPosition - (float) index1;
+                const int wrapped1 = ((index1 % chorusBufferLength) + chorusBufferLength) % chorusBufferLength;
+                const int wrapped2 = (wrapped1 + 1) % chorusBufferLength;
+                chorusWetL += tapWeightsL[tap] * (chorusBufferL[(size_t) wrapped1]
+                    + fractional * (chorusBufferL[(size_t) wrapped2] - chorusBufferL[(size_t) wrapped1]));
+                chorusWetR += tapWeightsR[tap] * (chorusBufferR[(size_t) wrapped1]
+                    + fractional * (chorusBufferR[(size_t) wrapped2] - chorusBufferR[(size_t) wrapped1]));
+            }
+            chorusWetL *= 1.0f / 2.8f;
+            chorusWetR *= 1.0f / 2.8f;
+            chorusBufferL[(size_t) chorusWritePosition] = dryL;
+            chorusBufferR[(size_t) chorusWritePosition] = dryR;
+            chorusWritePosition = (chorusWritePosition + 1) % chorusBufferLength;
+            chorusLfoPhase = std::fmod (chorusLfoPhase
+                + juce::MathConstants<double>::twoPi * (double) rate / sampleRate,
+                juce::MathConstants<double>::twoPi);
+        }
+        float fxL=dryL+wet*delayedL+chorus*chorusWetL+reverb*(rvL-dryL),fxR=dryR+wet*delayedR+chorus*chorusWetR+reverb*(rvR-dryR);
+        // Final safety stage: remove subsonic DC while retaining state across blocks,
         // then apply a bounded soft limiter.  Non-finite values are muted before
         // entering the stateful stages so one bad sample cannot poison the stream.
         const float raw[2] = { fxL, fxR };

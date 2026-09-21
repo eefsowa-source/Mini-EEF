@@ -60,11 +60,17 @@ private:
     double sampleRate = 44100.0;
     juce::AudioBuffer<float> fxDelay;
     int fxWritePosition = 0;
-    float chorusPhase = 0.0f;
+    float chorusPhase = 0.0f; // legacy field kept for state-reset compatibility
     std::array<float, 4> reverbL {}, reverbR {};
     // Per-channel state for the final DC blocker.  Kept on the processor so
     // state survives block boundaries without any real-time allocation.
     std::array<float, 2> dcInput {}, dcOutput {};
+    // Dimension-D-style quad-tap chorus: dedicated stereo buffer, 4 LFO
+    // phases at 90 degrees, fixed centre delay, dry always unity.
+    static constexpr int chorusBufferLength = 4800; // 100 ms at 48 kHz
+    std::array<float, chorusBufferLength> chorusBufferL {}, chorusBufferR {};
+    int chorusWritePosition = 0;
+    double chorusLfoPhase = 0.0;
     // Both pipelines are constructed once with their filter state allocated
     // outside the real-time callback.  The parameter only selects between
     // these prepared paths; processBlock never creates or resizes anything.
