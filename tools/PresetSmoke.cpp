@@ -160,7 +160,11 @@ int runFactoryPresetContractRegression()
     }
 
     const juce::StringArray expectedNames {
-        "Init", "Supersaw Pad", "Trance Pluck", "Arena Lead", "Sub Mono Bass", "Acid Bass"
+        "Init", "Supersaw Pad", "Trance Pluck", "Arena Lead", "Sub Mono Bass", "Acid Bass",
+        "Glass Keys", "Warm Poly", "Velvet Strings", "Neon Bell", "Pulse Sequence", "Digital Pluck",
+        "Wide Brass", "Soft Organ", "Juno Choir", "Motion Pad", "FMish Bass", "Rubber Mono",
+        "Resonant Sweep", "Noise SFX", "Lo-Fi Keys", "Dream Lead", "Octave Stab", "Deep Drone",
+        "Percussive Click", "Classic PWM"
     };
     const auto& actualNames = FactoryPresets::names();
     bool namesMatch = actualNames.size() == expectedNames.size();

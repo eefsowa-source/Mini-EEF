@@ -14,7 +14,7 @@ Fix confirmed sound and validation defects without adding parameters, restoring 
 
 ## Compatibility and realtime constraints
 
-- Keep all APVTS parameter IDs, defaults, six factory presets, VST3 identity, Note On/Off plus velocity-only MIDI filtering, and sample-offset event timing.
+- Keep all APVTS parameter IDs, defaults, the factory preset bank, VST3 identity, Note On/Off plus velocity-only MIDI filtering, and sample-offset event timing.
 - No allocation, lock, file I/O, host notification, or UI call in `processBlock`.
 - Held-note tracking uses fixed-size storage. Delay interpolation reads the existing preallocated buffer. Oversampling chunks reuse the already prepared JUCE oversamplers.
 - No reverb redesign or new UI controls in this patch. Reverb topology and parameter smoothing are a follow-up after these correctness gates pass.

@@ -12,7 +12,27 @@ const juce::StringArray fileNames {
     "03_trance_pluck.eonpreset",
     "04_arena_lead.eonpreset",
     "05_sub_mono_bass.eonpreset",
-    "06_acid_bass.eonpreset"
+    "06_acid_bass.eonpreset",
+    "07_glass_keys.eonpreset",
+    "08_warm_poly.eonpreset",
+    "09_velvet_strings.eonpreset",
+    "10_neon_bell.eonpreset",
+    "11_pulse_sequence.eonpreset",
+    "12_digital_pluck.eonpreset",
+    "13_wide_brass.eonpreset",
+    "14_soft_organ.eonpreset",
+    "15_juno_choir.eonpreset",
+    "16_motion_pad.eonpreset",
+    "17_fmish_bass.eonpreset",
+    "18_rubber_mono.eonpreset",
+    "19_resonant_sweep.eonpreset",
+    "20_noise_sfx.eonpreset",
+    "21_lo_fi_keys.eonpreset",
+    "22_dream_lead.eonpreset",
+    "23_octave_stab.eonpreset",
+    "24_deep_drone.eonpreset",
+    "25_percussive_click.eonpreset",
+    "26_classic_pwm.eonpreset"
 };
 
 bool hasMatchingParameterValues (const EonMiniEEFProcessor& first,
