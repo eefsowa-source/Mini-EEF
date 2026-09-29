@@ -25,7 +25,9 @@ const juce::Colour cream    (0xfff2e7d2);
 constexpr int headerY = 9;
 constexpr int headerHeight = 78;
 constexpr int contentTop = 96;
-constexpr int contentMargin = 16;
+// A wider margin than a digital panel would use, so the walnut cheeks and the
+// top rail actually read as a cabinet around the instrument, not a border.
+constexpr int contentMargin = 26;
 constexpr int moduleGap = 10;
 constexpr int oscillatorHeight = 430;
 constexpr int oscillatorCardsHeight = 342;
@@ -203,34 +205,70 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     const auto h = getHeight();
 
     // Analogue chassis: a walnut-cheeked cabinet with a sanded aluminium
-    // centre panel.  The wood grain runs vertically along the cheeks and the
-    // brushed pass runs horizontally across the panel, the way real cabinets
-    // are finished.
-    juce::ColourGradient chassis (juce::Colour (0xff54402e), 0.0f, 0.0f,
-                                  walnut, 0.0f, (float) h, false);
-    g.setGradientFill (chassis);
-    g.fillRect (getLocalBounds());
+    // centre panel.  The wood is cached into an image on resize rather than
+    // re-stroked every frame: the grain needs hundreds of thin lines to read
+    // as wood at all, and repainting that on every timer tick would cost more
+    // than the rest of the panel put together.
+    if (woodCache.getWidth() != w || woodCache.getHeight() != h)
+    {
+        woodCache = juce::Image (juce::Image::ARGB, w, h, true);
+        juce::Graphics wood (woodCache);
+        wood.fillAll (bg);
+        juce::ColourGradient cheek (juce::Colour (0xFF6B5138), 0.0f, 0.0f,
+                                    walnut, 0.0f, (float) h, false);
+        wood.setGradientFill (cheek);
+        wood.fillRect (0, 0, w, h);
 
-    // Deterministic wood grain: low-frequency bands plus a few darker lines.
-    // No per-frame randomness, so the panel never shimmers while a host renders.
-    for (int y = 3; y < h; y += 7)
-    {
-        const float band = 0.5f + 0.5f * std::sin ((float) y * 0.085f);
-        g.setColour (juce::Colours::black.withAlpha (0.030f + 0.026f * band));
-        g.fillRect (0, y, w, 3);
+        // Cathedral grain: nested arcs whose centre wanders down the board,
+        // which is what gives flat-sawn walnut its arch pattern.
+        wood.setColour (juce::Colours::black.withAlpha (0.10f));
+        for (int arc = 0; arc < 26; ++arc)
+        {
+            const float t = (float) arc / 26.0f;
+            const float centreY = (float) h * (0.08f + 0.92f * t);
+            const float centreX = (float) w * (0.5f + 0.22f * std::sin (t * 5.1f));
+            const float radius = (float) w * (0.16f + 0.40f * t);
+            juce::Path band;
+            band.addCentredArc (centreX, centreY, radius, radius * 2.4f,
+                                0.0f, 1.05f, 2.10f, true);
+            wood.strokePath (band, juce::PathStrokeType (0.7f + 0.5f * t,
+                                                         juce::PathStrokeType::curved,
+                                                         juce::PathStrokeType::rounded));
+        }
+        // Fine pore lines running with the grain.
+        for (int line = 0; line < 46; ++line)
+        {
+            const float t = (float) line / 46.0f;
+            const float y = (float) h * (0.02f + 0.96f * t);
+            const float wobble = 5.0f * std::sin (t * 11.0f) + 2.5f * std::sin (t * 27.0f);
+            wood.setColour (juce::Colours::black.withAlpha (0.030f + 0.030f
+                                      * (0.5f + 0.5f * std::sin (t * 19.0f))));
+            wood.drawLine (0.0f, y + wobble, (float) w, y - wobble, 0.8f);
+            wood.setColour (juce::Colour (0xFFB08B5E).withAlpha (0.020f));
+            wood.drawLine (0.0f, y + wobble + 1.0f, (float) w, y - wobble + 1.0f, 0.6f);
+        }
+        // Speckle: the open pores that make a satin lacquer look like wood.
+        for (int speck = 0; speck < 320; ++speck)
+        {
+            const float x = std::fmod ((float) speck * 97.13f, (float) w);
+            const float y = std::fmod ((float) speck * 61.77f, (float) h);
+            wood.setColour (juce::Colours::black.withAlpha (0.045f));
+            wood.fillEllipse (x, y, 1.6f, 0.9f);
+        }
+        // One consistent light source: a soft sheen falling from the upper left.
+        juce::ColourGradient sheen (juce::Colour (0x18FFE0B0), 0.0f, 0.0f,
+                                    juce::Colours::transparentBlack, (float) w * 0.7f,
+                                    (float) h, false);
+        wood.setGradientFill (sheen);
+        wood.fillRect (0, 0, w, h);
     }
-    for (int line = 0; line < 7; ++line)
-    {
-        const int y = 40 + line * (h / 7);
-        g.setColour (juce::Colours::black.withAlpha (0.055f));
-        g.fillRect (0, y, w, 1);
-    }
+    g.drawImageAt (woodCache, 0, 0);
 
     const auto header = juce::Rectangle<float> (12.0f, (float) headerY, (float) w - 24.0f, (float) headerHeight);
     g.setColour (juce::Colours::black.withAlpha (0.58f));
     g.fillRoundedRectangle (header.translated (0.0f, 0.8f), 6.0f);
     juce::ColourGradient headerMetal (juce::Colour (0xff5f4a36), header.getCentreX(), header.getY(),
-                                      juce::Colour (0xff0a252d), header.getCentreX(), header.getBottom(), false);
+                                      juce::Colour (0xFF1A140E), header.getCentreX(), header.getBottom(), false);
     g.setGradientFill (headerMetal);
     g.fillRoundedRectangle (header, 6.0f);
     g.setColour (brass.withAlpha (0.70f));

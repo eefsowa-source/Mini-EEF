@@ -143,7 +143,15 @@ public:
     {
         constexpr float captionHeight = 17.0f;
         const float dialHeight = juce::jmax (20.0f, (float) height - captionHeight - 2.0f);
-        const float diameter = juce::jmax (18.0f, juce::jmin ((float) width - 4.0f, dialHeight) - 4.0f);
+        // Analogue panels are densely populated: a small dial with a printed
+        // pointer reads as a control, while an oversized one reads as a gauge.
+        // The 0.84 factor and the 72 px ceiling keep the whole set in that
+        // range while preserving the ratio between the large and small dials.
+        constexpr float dialScale = 0.84f;
+        constexpr float maxDiameter = 72.0f;
+        const float diameter = juce::jmax (16.0f,
+            juce::jmin (juce::jmin ((float) width - 4.0f, dialHeight) * dialScale,
+                        maxDiameter));
         const float cx = static_cast<float> (x) + static_cast<float> (width) * 0.5f;
         const float cy = static_cast<float> (y) + dialHeight * 0.5f + 1.5f;
         const float radius = diameter * 0.5f;
@@ -158,51 +166,102 @@ public:
         const auto rim = outer.reduced (2.0f);
         const auto face = outer.reduced (4.6f);
 
-        // Analogue knob anatomy: a moulded cream cap sitting in a dark skirt,
-        // a knurled skirt for grip, and a printed indicator line.  There is no
-        // glowing arc and no hub: real analogue dials read the pointer, not a
-        // light show, and the value arc is drawn as printed ink on the skirt.
-        g.setColour (juce::Colour (0x30000000));
-        g.fillEllipse (outer.translated (0.0f, 4.6f));
-        g.setColour (juce::Colour (0x66000000));
-        g.fillEllipse (outer.translated (0.0f, 2.4f));
-        // Dark skirt, the moulded plastic the cap is pressed into.
-        juce::ColourGradient skirt (juce::Colour (0xff2b2723), outer.getCentreX(), outer.getY(),
-                                    juce::Colour (0xff100e0c), outer.getCentreX(), outer.getBottom(), false);
+        // A moulded knob is a cylinder, not a disc: draw the barrel wall below
+        // the cap so the control reads as a part with height.  One light
+        // direction (upper-left) is used for every element on the panel, so
+        // the whole face looks lit by the same lamp instead of each part
+        // carrying its own highlight.
+        const float barrelHeight = juce::jmin (4.5f, radius * 0.16f);
+
+        // Contact shadow on the panel, offset away from the light.
+        g.setColour (juce::Colours::black.withAlpha (0.34f));
+        g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.10f, radius * 0.16f + barrelHeight));
+        g.setColour (juce::Colours::black.withAlpha (0.20f));
+        g.fillEllipse (outer.reduced (radius * 0.28f)
+                                 .translated (radius * 0.13f, radius * 0.19f + barrelHeight));
+
+        // Barrel wall: the skirt the cap is pressed into, lit from upper-left.
+        const auto barrel = juce::Rectangle<float> (centre.x - radius, centre.y - radius + barrelHeight,
+                                                     diameter, diameter);
+        juce::ColourGradient wall (juce::Colour (0xFF3A342D), centre.x - radius, centre.y,
+                                   juce::Colour (0xFF15120F), centre.x + radius, centre.y + diameter, false);
+        g.setGradientFill (wall);
+        g.fillEllipse (barrel);
+
+        // Dark skirt under the cap.
+        juce::ColourGradient skirt (juce::Colour (0xFF37312A), outer.getCentreX(), outer.getY(),
+                                    juce::Colour (0xFF100E0C), outer.getCentreX(), outer.getBottom(), false);
         g.setGradientFill (skirt);
         g.fillEllipse (outer);
-        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.setColour (juce::Colours::black.withAlpha (0.60f));
         g.drawEllipse (rim, 1.0f);
+        // Occlusion where the cap overhangs the skirt: a dark crescent on the
+        // shadow side only, which is what sells the cap as raised.
+        g.setColour (juce::Colours::black.withAlpha (0.30f));
+        {
+            juce::Path occlusion;
+            const auto r = outer.reduced (0.6f);
+            occlusion.addCentredArc (r.getCentreX(), r.getCentreY(), r.getWidth() * 0.5f,
+                                      r.getHeight() * 0.5f, 0.0f,
+                                      0.15f * juce::MathConstants<float>::pi,
+                                      0.70f * juce::MathConstants<float>::pi, true);
+            g.strokePath (occlusion, juce::PathStrokeType (1.6f));
+        }
 
         // Knurling on the skirt: fine ridges, low contrast, purely tactile.
-        if (radius >= 20.0f)
+        if (radius >= 16.0f)
         {
-            const int ridges = juce::jlimit (24, 44, (int) std::round (radius * 1.6f));
+            const int ridges = juce::jlimit (22, 44, (int) std::round (radius * 1.9f));
             for (int ridge = 0; ridge < ridges; ++ridge)
             {
                 const float angle = juce::MathConstants<float>::twoPi * (float) ridge / (float) ridges;
-                const auto a = pointOnRing (angle, radius - 3.0f);
+                const auto a = pointOnRing (angle, radius - 2.6f);
                 const auto b = pointOnRing (angle, radius - 0.4f);
-                g.setColour (juce::Colours::black.withAlpha (0.34f));
+                // Shade each ridge by its own facing relative to the light.
+                const float facing = 0.5f + 0.5f * std::cos (angle - juce::MathConstants<float>::pi * 1.25f);
+                g.setColour (juce::Colours::black.withAlpha (0.16f + 0.26f * (1.0f - facing)));
                 g.drawLine (a.x, a.y + 0.5f, b.x, b.y + 0.5f, 0.6f);
-                g.setColour (juce::Colour (0xffe6d8bd).withAlpha (0.07f));
+                g.setColour (juce::Colour (0xFFE6D8BD).withAlpha (0.04f + 0.10f * facing));
                 g.drawLine (a.x, a.y, b.x, b.y, 0.5f);
             }
         }
 
-        // The cream cap: warm, slightly domed, matte rather than glossy.
-        juce::ColourGradient cap (juce::Colour (0xfff4ead6), face.getCentreX(), face.getY(),
-                                  juce::Colour (0xffcdbfa4), face.getCentreX(), face.getBottom(), false);
+        // The cream cap: warm, slightly domed, matte rather than glossy.  The
+        // gradient runs from the lit upper-left to the shaded lower-right.
+        juce::ColourGradient cap (juce::Colour (0xFFF7EEDC), face.getX(), face.getY(),
+                                  juce::Colour (0xFFBCAC8E), face.getRight(), face.getBottom(), false);
         g.setGradientFill (cap);
         g.fillEllipse (face);
-        const auto capInset = face.reduced (1.6f);
-        juce::ColourGradient capCore (juce::Colour (0xffece0c8), capInset.getCentreX(), capInset.getY(),
-                                      juce::Colour (0xffd2c4a9), capInset.getCentreX(), capInset.getBottom(), false);
+        const auto capInset = face.reduced (1.5f);
+        juce::ColourGradient capCore (juce::Colour (0xFFF1E6D0), capInset.getX(), capInset.getY(),
+                                      juce::Colour (0xFFCCC0A6), capInset.getRight(), capInset.getBottom(), false);
         g.setGradientFill (capCore);
         g.fillEllipse (capInset);
-        g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.42f));
+        // Specular bloom on the lit shoulder, and a terminator on the dark one.
+        const auto drawShoulderArc = [&g] (const juce::Rectangle<float>& bounds,
+                                          float startAngle, float endAngle,
+                                          juce::Colour colour, float thickness)
+        {
+            juce::Path shoulder;
+            shoulder.addCentredArc (bounds.getCentreX(), bounds.getCentreY(),
+                                    bounds.getWidth() * 0.5f, bounds.getHeight() * 0.5f,
+                                    0.0f, startAngle, endAngle, true);
+            g.setColour (colour);
+            g.strokePath (shoulder, juce::PathStrokeType (thickness,
+                                  juce::PathStrokeType::curved,
+                                  juce::PathStrokeType::rounded));
+        };
+        drawShoulderArc (capInset, 0.80f * juce::MathConstants<float>::pi,
+                         1.18f * juce::MathConstants<float>::pi,
+                         juce::Colour (0xFFFFF8EA).withAlpha (0.34f), 1.5f);
+        drawShoulderArc (capInset, 0.20f * juce::MathConstants<float>::pi,
+                         0.52f * juce::MathConstants<float>::pi,
+                         juce::Colour (0xFF7A684A).withAlpha (0.26f), 1.2f);
+        g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.34f));
         g.drawEllipse (capInset, 0.7f);
         // Faint moulding seam: the hairline a two-part plastic knob leaves.
+        g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.16f));
+        g.drawEllipse (face.reduced (0.7f), 0.6f);
         g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.18f));
         g.drawEllipse (face.reduced (0.7f), 0.6f);
 
@@ -282,5 +341,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoDepthAttachment, lfoPitchAttachment, velocityAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxWetAttachment, delayTimeAttachment, delayFeedbackAttachment, delayStereoAttachment, chorusDepthAttachment, chorusRateAttachment, chorusMixAttachment, reverbMixAttachment, reverbModulationAttachment;
     float meterLeft = 0.0f, meterRight = 0.0f;
+    // Cached wood cabinet: the grain needs hundreds of thin strokes to read
+    // as wood, so it is rasterised on resize instead of every paint().
+    juce::Image woodCache;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EonMiniEEFEditor)
 };
