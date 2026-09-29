@@ -268,11 +268,14 @@ public:
         cutoffVariance = 1.0f;
         envelopeVariance = 1.0f;
         levelVariance = 1.0f;
+        pitchVarianceRatio = 1.0f;
         if (varianceAmount > 1.0e-5f)
         {
             constexpr float cutoffCentsRange = 40.0f;   // +/-0.40 semitones
             constexpr float envelopeTimeRange = 0.25f;  // +/-25% stage times
             constexpr float levelRange = 0.15f;         // +/-15% voice level
+            constexpr float pitchCentsRange = 12.0f;    // +/-12 cents, Diva-style
+                                                        // voice-card tuning offset
             const float cutoffCents = cutoffCentsRange * varianceAmount
                 * (2.0f * unitRandomFromState (varianceState) - 1.0f);
             cutoffVariance = std::pow (2.0f, cutoffCents / 1200.0f);
@@ -280,6 +283,11 @@ public:
                 * (2.0f * unitRandomFromState (varianceState) - 1.0f);
             levelVariance = 1.0f + levelRange * varianceAmount
                 * (2.0f * unitRandomFromState (varianceState) - 1.0f);
+            // Pitch is drawn last so the three offsets above keep their
+            // seeded values for existing variance>0 presets.
+            const float pitchCents = pitchCentsRange * varianceAmount
+                * (2.0f * unitRandomFromState (varianceState) - 1.0f);
+            pitchVarianceRatio = std::pow (2.0f, pitchCents / 1200.0f);
         }
         std::array<float, 4> phaseStart {};
         for (size_t oscillator = 0; oscillator < phaseStart.size(); ++oscillator)
@@ -404,6 +412,7 @@ public:
         cutoffVariance = 1.0f;
         envelopeVariance = 1.0f;
         levelVariance = 1.0f;
+        pitchVarianceRatio = 1.0f;
         ampEnvelopeState = EnvelopeCurveState {};
         filterEnvelopeState = EnvelopeCurveState {};
     }
@@ -619,7 +628,8 @@ public:
             matrixPwm = juce::jlimit (-0.45f, 0.45f, matrixPwm);
             osc1FmAmount = juce::jlimit (-0.5f, 0.5f, osc1FmAmount);
             const float modulatedFrequency = baseFrequency * std::pow (2.0f, matrixPitch / 12.0f)
-                * std::pow (2.0f, lfo * lfoPitch->load() / 12.0f);
+                * std::pow (2.0f, lfo * lfoPitch->load() / 12.0f)
+                * pitchVarianceRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
             // behaviour instead of phase folding on the very top notes.
@@ -981,6 +991,7 @@ private:
     // 1.0 while the variance amount is zero, so the legacy path is unchanged.
     float varianceAmount = 0.0f;
     float cutoffVariance = 1.0f, envelopeVariance = 1.0f, levelVariance = 1.0f;
+    float pitchVarianceRatio = 1.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
     juce::SmoothedValue<float> resonanceSmooth;
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,

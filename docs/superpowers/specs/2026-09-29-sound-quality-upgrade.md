@@ -59,7 +59,7 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 ### P2. 아날로그 편차와 시그니처 음색
 
 1. **보이스별 편차(voice variance)**
-   - 변경: 폴리 보이스별 고정 seed 기반 cutoff/env-time/level 미세 오프셋
+   - 변경: 폴리 보이스별 고정 seed 기반 pitch(±12 cents)/cutoff/env-time/level 미세 오프셋
      (unison drift와 별개, 보이스 카드 편차 모델). amount 0=비트 동일.
    - 게이트: seed 고정 오프라인 재현성, 오프셋 상한 문서화.
 
@@ -112,7 +112,7 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - P1.1 필터 드라이브 + 24 dB LPF24: 완료 (reports/2026-09-29-filter-drive-lpf24.md)
 - P1.2 지수형 앰프 엔벨로프: 완료 (reports/2026-09-29-envelope-curve.md)
 - P1.3 필터 전용 엔벨로프 + PWM 목적지: 완료 (reports/2026-09-29-filter-envelope-pwm.md)
-- P2.1 보이스별 편차 (컷오프/엔벨로프 시간/레벨): 완료
+- P2.1 보이스별 편차 (피치 ±12 cents/컷오프/엔벨로프 시간/레벨): 완료
 - P2.2 노이즈 스테레오 비상관 + 유니즌 레벨 drift: 완료
 - P2.3 hard sync / ring-mod: 제외 (보고서 근거 참조)
 - P2: 완료 (reports/2026-09-30-voice-variance-stereo-noise.md)
