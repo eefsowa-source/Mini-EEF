@@ -99,13 +99,14 @@ namespace
     }
 
     float modulationSourceValue (int source, float lfo, float envelope,
-                                 float velocity) noexcept
+                                 float velocity, float filterEnvelope) noexcept
     {
-        switch (juce::jlimit (0, 4, source))
+        switch (juce::jlimit (0, 5, source))
         {
             case 1: return lfo;
             case 2: return envelope;
             case 3: return velocity;
+            case 5: return filterEnvelope;
             default: return 0.0f;
         }
     }
@@ -597,7 +598,7 @@ public:
                     || modDestinationParams[static_cast<size_t> (slot)] == nullptr
                     || modAmountParams[static_cast<size_t> (slot)] == nullptr)
                     continue;
-                const int source = juce::jlimit (0, 4, juce::roundToInt (modSourceParams[static_cast<size_t> (slot)]->load()));
+                const int source = juce::jlimit (0, 5, juce::roundToInt (modSourceParams[static_cast<size_t> (slot)]->load()));
                 const int destination = juce::jlimit (0, 5, juce::roundToInt (modDestinationParams[static_cast<size_t> (slot)]->load()));
                 const float amount = juce::jlimit (-1.0f, 1.0f, modAmountParams[static_cast<size_t> (slot)]->load());
                 // Oscillator 1 is an audio-rate source and is handled in the
@@ -608,7 +609,8 @@ public:
                         osc1FmAmount += 0.5f * amount;
                     continue;
                 }
-                const float sourceValue = modulationSourceValue (source, lfo, envelope, vel);
+                const float sourceValue = modulationSourceValue (source, lfo, envelope, vel,
+                                                                 filterEnvelope);
                 switch (destination)
                 {
                     case 1: matrixPitch += 12.0f * amount * sourceValue; break;
@@ -1309,7 +1311,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
         juce::StringArray { "1x Eco", "2x Quality", "4x High" }, 0));
 
     const juce::StringArray modSources {
-        "Off", "LFO", "Amp Env", "Velocity", "Osc 1"
+        "Off", "LFO", "Amp Env", "Velocity", "Osc 1", "Filter Env"
     };
     const juce::StringArray modDestinations {
         "Off", "Pitch", "Cutoff", "Amp", "Osc 2 FM", "PWM"

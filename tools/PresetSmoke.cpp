@@ -164,7 +164,8 @@ int runFactoryPresetContractRegression()
         "Glass Keys", "Warm Poly", "Velvet Strings", "Neon Bell", "Pulse Sequence", "Digital Pluck",
         "Wide Brass", "Soft Organ", "Juno Choir", "Motion Pad", "FMish Bass", "Rubber Mono",
         "Resonant Sweep", "Noise SFX", "Lo-Fi Keys", "Dream Lead", "Octave Stab", "Deep Drone",
-        "Percussive Click", "Classic PWM"
+        "Percussive Click", "Classic PWM", "Minimoog Lead", "Moog Bass", "Diva Saw Pad",
+        "Juno Pad", "Prophet Brass", "Minifreak Pluck", "Vintage Sync Lead", "Analog Strings"
     };
     const auto& actualNames = FactoryPresets::names();
     bool namesMatch = actualNames.size() == expectedNames.size();
@@ -304,7 +305,7 @@ int runFactoryPresetContractRegression()
     }
 
     const juce::StringArray expectedModSources {
-        "Off", "LFO", "Amp Env", "Velocity", "Osc 1"
+        "Off", "LFO", "Amp Env", "Velocity", "Osc 1", "Filter Env"
     };
     for (int slot = 0; slot < 4; ++slot)
     {
@@ -313,7 +314,7 @@ int runFactoryPresetContractRegression()
         if (source == nullptr || source->choices != expectedModSources)
         {
             std::cerr << "Mod source " << slot
-                      << " still exposes removed MIDI expression sources\n";
+                      << " mod source list does not match the expected choices\n";
             ++failures;
         }
     }

@@ -115,7 +115,7 @@ target_link_libraries(EonMiniEEF_CpuProbe PRIVATE EonMiniEEF juce::juce_audio_ut
 
 # Offline WAV renderer for ears-on verification without a DAW.  Renders a
 # 4-note chord through the selected factory preset so users can listen to the
-# synth offline.  Run: EonMiniEEF_RenderWav <preset 0-25> <out.wav>
+# synth offline.  Run: EonMiniEEF_RenderWav <preset 0-33> <out.wav>
 add_executable(EonMiniEEF_RenderWav tools/RenderWav.cpp)
 target_compile_features(EonMiniEEF_RenderWav PRIVATE cxx_std_20)
 target_compile_definitions(EonMiniEEF_RenderWav PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)

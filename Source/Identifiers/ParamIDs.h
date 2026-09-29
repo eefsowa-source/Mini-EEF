@@ -119,7 +119,11 @@ inline constexpr const char* modAmount (int index) {
     return index == 0 ? "modAmount0" : index == 1 ? "modAmount1" : index == 2 ? "modAmount2" : "modAmount3";
 }
 // Matrix source/destination indices are fixed in the current state format.
-// Source 0 is off, 1-3 are LFO/envelope/velocity and 4 is oscillator 1
-// (audio-rate FM source). Legacy source 4/5/6 states are migrated on load.
+// Source 0 is off, 1-3 are LFO/envelope/velocity, 4 is oscillator 1
+// (audio-rate FM source) and 5 is the dedicated filter envelope.  Legacy
+// source 4/5/6 states are migrated on load: 6 became oscillator 1, and
+// anything else at 4 or above became off, so index 5 was already
+// normalised to off before this source existed.  No stored state can
+// therefore acquire a surprise filter-envelope routing on load.
 // Destination 0 is off, 1-5 are pitch/cutoff/amp/oscillator-2 FM/PWM.
 }

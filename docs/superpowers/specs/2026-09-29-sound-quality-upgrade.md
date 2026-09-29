@@ -116,6 +116,11 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - P2.2 노이즈 스테레오 비상관 + 유니즌 레벨 drift: 완료
 - P2.3 hard sync / ring-mod: 제외 (보고서 근거 참조)
 - P2: 완료 (reports/2026-09-30-voice-variance-stereo-noise.md)
+- 매트릭스 소스 5 = 전용 필터 엔벨로프 (Diva의 S&H Env 류). 레거시 상태는
+  source 5를 이미 off로 정규화하고 있어 저장 상태가 예기치 않게 바뀌지 않는다.
+- 공장 프리셋 8종 추가 (Minimoog Lead / Moog Bass / Diva Saw Pad / Juno Pad /
+  Prophet Brass / Minifreak Pluck / Vintage Sync Lead / Analog Strings).
+  렌더 peak 0.068-0.230으로 기존 26종의 0.098-0.226 범위 안에 있다.
 - P3.1 리버 comb 변조: 완료
 - P3.2 델레이 스테레오 폭: 완료
 - P3.3 ampSat/limiter를 오버샘플 경로로 이동: 완료

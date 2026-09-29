@@ -38,6 +38,9 @@ const juce::StringArray& names()
         "FMish Bass", "Rubber Mono", "Resonant Sweep", "Noise SFX",
         "Lo-Fi Keys", "Dream Lead", "Octave Stab", "Deep Drone",
         "Percussive Click", "Classic PWM"
+        , "Minimoog Lead", "Moog Bass", "Diva Saw Pad", "Juno Pad"
+        , "Prophet Brass", "Minifreak Pluck", "Vintage Sync Lead"
+        , "Analog Strings"
     };
     return presetNames;
 }
@@ -908,6 +911,412 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             set (ParamIDs::modSource (0), 1.0f);
             set (ParamIDs::modDestination (0), 2.0f);
             set (ParamIDs::modAmount (0), 0.18f);
+            break;
+
+        case 26:
+            // Minimoog-style lead: three saws into a resonant ladder-ish
+            // lowpass, with the per-voice variance carrying the tuner slop
+            // that a bank of Moog oscillators would have.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.52f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.42f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, -7.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc3Level, 0.28f);
+            set (ParamIDs::osc3Coarse, 0.0f);
+            set (ParamIDs::osc3Fine, 7.0f);
+            set (ParamIDs::osc4Wave, 1.0f);
+            set (ParamIDs::osc4Level, 0.09f);
+            set (ParamIDs::osc4Coarse, -12.0f);
+            set (ParamIDs::unisonVoices, 1.0f);
+            set (ParamIDs::unisonDetune, 0.0f);
+            set (ParamIDs::cutoff, 2400.0f);
+            set (ParamIDs::resonance, 0.62f);
+            set (ParamIDs::filterDrive, 0.22f);
+            set (ParamIDs::attack, 0.010f);
+            set (ParamIDs::decay, 0.90f);
+            set (ParamIDs::sustain, 0.72f);
+            set (ParamIDs::release, 0.45f);
+            set (ParamIDs::envCurve, 0.35f);
+            set (ParamIDs::gain, 0.26f);
+            set (ParamIDs::drive, 0.06f);
+            set (ParamIDs::driveCurve, 2.0f);
+            set (ParamIDs::ampSat, 0.20f);
+            set (ParamIDs::velocityAmount, 0.55f);
+            set (ParamIDs::keyTracking, 0.30f);
+            set (ParamIDs::voiceVariance, 0.55f);
+            set (ParamIDs::fxWet, 0.16f);
+            set (ParamIDs::reverbMix, 0.14f);
+            set (ParamIDs::oversampling, 2.0f);
+            break;
+
+        case 27:
+            // Moog-style mono bass: the filter envelope does the talking and
+            // a sub square holds the bottom while the saws move.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.58f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.46f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, -5.0f);
+            set (ParamIDs::osc3Wave, 1.0f);
+            set (ParamIDs::osc3Level, 0.42f);
+            set (ParamIDs::osc3Coarse, -12.0f);
+            set (ParamIDs::osc4Level, 0.0f);
+            set (ParamIDs::voiceMode, 1.0f);
+            set (ParamIDs::unisonVoices, 2.0f);
+            set (ParamIDs::unisonDetune, 5.0f);
+            set (ParamIDs::unisonSpread, 0.12f);
+            set (ParamIDs::unisonDrift, 0.20f);
+            set (ParamIDs::cutoff, 380.0f);
+            set (ParamIDs::resonance, 0.55f);
+            set (ParamIDs::filterEnvAmount, 0.62f);
+            set (ParamIDs::filterAttack, 0.004f);
+            set (ParamIDs::filterDecay, 0.34f);
+            set (ParamIDs::filterSustain, 0.16f);
+            set (ParamIDs::filterRelease, 0.30f);
+            set (ParamIDs::attack, 0.004f);
+            set (ParamIDs::decay, 0.40f);
+            set (ParamIDs::sustain, 0.86f);
+            set (ParamIDs::release, 0.22f);
+            set (ParamIDs::envCurve, 0.45f);
+            set (ParamIDs::gain, 0.58f);
+            set (ParamIDs::drive, 0.14f);
+            set (ParamIDs::driveCurve, 2.0f);
+            set (ParamIDs::ampSat, 0.38f);
+            set (ParamIDs::keyTracking, 0.20f);
+            set (ParamIDs::voiceVariance, 0.45f);
+            set (ParamIDs::fxWet, 0.0f);
+            set (ParamIDs::oversampling, 2.0f);
+            break;
+
+        case 28:
+            // Diva-style saw pad: wide unison, slow drift, and a gentle
+            // filter envelope so the chord opens instead of sitting still.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.60f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.52f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, 9.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc3Level, 0.30f);
+            set (ParamIDs::osc3Coarse, 0.0f);
+            set (ParamIDs::osc3Fine, -9.0f);
+            set (ParamIDs::osc4Wave, 2.0f);
+            set (ParamIDs::osc4Level, 0.14f);
+            set (ParamIDs::osc4Coarse, 12.0f);
+            set (ParamIDs::osc4Pan, -0.40f);
+            set (ParamIDs::unisonVoices, 7.0f);
+            set (ParamIDs::unisonDetune, 14.0f);
+            set (ParamIDs::unisonSpread, 0.88f);
+            set (ParamIDs::unisonPhase, 0.62f);
+            set (ParamIDs::unisonDrift, 0.34f);
+            set (ParamIDs::cutoff, 1600.0f);
+            set (ParamIDs::resonance, 0.20f);
+            set (ParamIDs::filterEnvAmount, 0.34f);
+            set (ParamIDs::filterAttack, 0.60f);
+            set (ParamIDs::filterDecay, 2.20f);
+            set (ParamIDs::filterSustain, 0.62f);
+            set (ParamIDs::filterRelease, 2.40f);
+            set (ParamIDs::attack, 0.90f);
+            set (ParamIDs::decay, 1.80f);
+            set (ParamIDs::sustain, 0.84f);
+            set (ParamIDs::release, 3.40f);
+            set (ParamIDs::envCurve, 0.40f);
+            set (ParamIDs::gain, 0.58f);
+            set (ParamIDs::drive, 0.05f);
+            set (ParamIDs::ampSat, 0.22f);
+            set (ParamIDs::lfoRate, 0.11f);
+            set (ParamIDs::lfoDepth, 0.16f);
+            set (ParamIDs::velocityAmount, 0.30f);
+            set (ParamIDs::keyTracking, 0.32f);
+            set (ParamIDs::voiceVariance, 0.70f);
+            set (ParamIDs::fxWet, 0.42f);
+            set (ParamIDs::delayTime, 0.44f);
+            set (ParamIDs::delayFeedback, 0.30f);
+            set (ParamIDs::delayStereo, 0.62f);
+            set (ParamIDs::chorusDepth, 0.010f);
+            set (ParamIDs::chorusRate, 0.21f);
+            set (ParamIDs::chorusMix, 0.38f);
+            set (ParamIDs::reverbMix, 0.44f);
+            set (ParamIDs::reverbModulation, 0.28f);
+            set (ParamIDs::oversampling, 1.0f);
+            set (ParamIDs::modSource (0), 1.0f);
+            set (ParamIDs::modDestination (0), 2.0f);
+            set (ParamIDs::modAmount (0), 0.14f);
+            set (ParamIDs::modSource (1), 5.0f);
+            set (ParamIDs::modDestination (1), 2.0f);
+            set (ParamIDs::modAmount (1), 0.22f);
+            break;
+
+        case 29:
+            // Juno-106-style pad: the pulse wave under a slow chorus, a
+            // high-passed bloom on the filter envelope, and a long tail.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.55f);
+            set (ParamIDs::osc2Wave, 1.0f);
+            set (ParamIDs::osc2Level, 0.44f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, 12.0f);
+            set (ParamIDs::osc2PulseWidth, 0.44f);
+            set (ParamIDs::osc3Wave, 1.0f);
+            set (ParamIDs::osc3Level, 0.26f);
+            set (ParamIDs::osc3Coarse, 12.0f);
+            set (ParamIDs::osc3PulseWidth, 0.62f);
+            set (ParamIDs::osc4Level, 0.0f);
+            set (ParamIDs::unisonVoices, 3.0f);
+            set (ParamIDs::unisonDetune, 8.0f);
+            set (ParamIDs::unisonSpread, 0.66f);
+            set (ParamIDs::unisonPhase, 0.55f);
+            set (ParamIDs::unisonDrift, 0.22f);
+            set (ParamIDs::cutoff, 2400.0f);
+            set (ParamIDs::resonance, 0.16f);
+            set (ParamIDs::filterEnvAmount, 0.44f);
+            set (ParamIDs::filterAttack, 0.35f);
+            set (ParamIDs::filterDecay, 1.60f);
+            set (ParamIDs::filterSustain, 0.70f);
+            set (ParamIDs::filterRelease, 2.60f);
+            set (ParamIDs::attack, 0.55f);
+            set (ParamIDs::decay, 1.40f);
+            set (ParamIDs::sustain, 0.86f);
+            set (ParamIDs::release, 2.80f);
+            set (ParamIDs::envCurve, 0.30f);
+            set (ParamIDs::gain, 0.60f);
+            set (ParamIDs::drive, 0.03f);
+            set (ParamIDs::ampSat, 0.18f);
+            set (ParamIDs::lfoRate, 0.42f);
+            set (ParamIDs::lfoDepth, 0.05f);
+            set (ParamIDs::velocityAmount, 0.35f);
+            set (ParamIDs::keyTracking, 0.40f);
+            set (ParamIDs::voiceVariance, 0.60f);
+            set (ParamIDs::fxWet, 0.46f);
+            set (ParamIDs::delayTime, 0.38f);
+            set (ParamIDs::delayFeedback, 0.24f);
+            set (ParamIDs::chorusDepth, 0.012f);
+            set (ParamIDs::chorusRate, 0.36f);
+            set (ParamIDs::chorusMix, 0.52f);
+            set (ParamIDs::reverbMix, 0.34f);
+            set (ParamIDs::reverbModulation, 0.18f);
+            set (ParamIDs::oversampling, 1.0f);
+            break;
+
+        case 30:
+            // Prophet-style brass: unison-detuned saws with the amp envelope
+            // opening the filter fast, then a sample-and-hold LFO for motion.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.58f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.46f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, -6.0f);
+            set (ParamIDs::osc3Wave, 1.0f);
+            set (ParamIDs::osc3Level, 0.18f);
+            set (ParamIDs::osc3Coarse, 12.0f);
+            set (ParamIDs::osc3PulseWidth, 0.46f);
+            set (ParamIDs::osc4Level, 0.0f);
+            set (ParamIDs::unisonVoices, 5.0f);
+            set (ParamIDs::unisonDetune, 11.0f);
+            set (ParamIDs::unisonSpread, 0.58f);
+            set (ParamIDs::unisonPhase, 0.48f);
+            set (ParamIDs::unisonDrift, 0.26f);
+            set (ParamIDs::cutoff, 900.0f);
+            set (ParamIDs::resonance, 0.30f);
+            set (ParamIDs::filterEnvAmount, 0.70f);
+            set (ParamIDs::filterAttack, 0.070f);
+            set (ParamIDs::filterDecay, 0.90f);
+            set (ParamIDs::filterSustain, 0.52f);
+            set (ParamIDs::filterRelease, 0.80f);
+            set (ParamIDs::attack, 0.070f);
+            set (ParamIDs::decay, 0.80f);
+            set (ParamIDs::sustain, 0.78f);
+            set (ParamIDs::release, 0.70f);
+            set (ParamIDs::envCurve, 0.50f);
+            set (ParamIDs::gain, 0.60f);
+            set (ParamIDs::drive, 0.08f);
+            set (ParamIDs::driveCurve, 1.0f);
+            set (ParamIDs::ampSat, 0.26f);
+            set (ParamIDs::lfoRate, 0.90f);
+            set (ParamIDs::lfoDepth, 0.06f);
+            set (ParamIDs::lfoShape, 2.0f);
+            set (ParamIDs::velocityAmount, 0.62f);
+            set (ParamIDs::keyTracking, 0.36f);
+            set (ParamIDs::voiceVariance, 0.62f);
+            set (ParamIDs::fxWet, 0.24f);
+            set (ParamIDs::delayTime, 0.28f);
+            set (ParamIDs::delayFeedback, 0.20f);
+            set (ParamIDs::chorusDepth, 0.006f);
+            set (ParamIDs::chorusRate, 0.30f);
+            set (ParamIDs::chorusMix, 0.22f);
+            set (ParamIDs::reverbMix, 0.26f);
+            set (ParamIDs::oversampling, 1.0f);
+            set (ParamIDs::modSource (0), 2.0f);
+            set (ParamIDs::modDestination (0), 2.0f);
+            set (ParamIDs::modAmount (0), 0.24f);
+            break;
+
+        case 31:
+            // Minifreak-style hybrid pluck: the digital wave under a fast
+            // filter envelope, with oscillator-1 FM adding the edge that a
+            // wavetable engine would otherwise supply.
+            set (ParamIDs::osc1Wave, 2.0f);
+            set (ParamIDs::osc1Level, 0.56f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.44f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, 7.0f);
+            set (ParamIDs::osc3Wave, 1.0f);
+            set (ParamIDs::osc3Level, 0.20f);
+            set (ParamIDs::osc3Coarse, 0.0f);
+            set (ParamIDs::osc3PulseWidth, 0.38f);
+            set (ParamIDs::osc4Level, 0.0f);
+            set (ParamIDs::unisonVoices, 2.0f);
+            set (ParamIDs::unisonDetune, 4.0f);
+            set (ParamIDs::unisonSpread, 0.30f);
+            set (ParamIDs::cutoff, 700.0f);
+            set (ParamIDs::resonance, 0.44f);
+            set (ParamIDs::filterEnvAmount, 0.78f);
+            set (ParamIDs::filterAttack, 0.002f);
+            set (ParamIDs::filterDecay, 0.26f);
+            set (ParamIDs::filterSustain, 0.10f);
+            set (ParamIDs::filterRelease, 0.28f);
+            set (ParamIDs::attack, 0.003f);
+            set (ParamIDs::decay, 0.34f);
+            set (ParamIDs::sustain, 0.12f);
+            set (ParamIDs::release, 0.36f);
+            set (ParamIDs::envCurve, 0.60f);
+            set (ParamIDs::gain, 0.58f);
+            set (ParamIDs::drive, 0.12f);
+            set (ParamIDs::driveCurve, 1.0f);
+            set (ParamIDs::ampSat, 0.34f);
+            set (ParamIDs::velocityAmount, 0.88f);
+            set (ParamIDs::keyTracking, 0.45f);
+            set (ParamIDs::voiceVariance, 0.50f);
+            set (ParamIDs::fxWet, 0.26f);
+            set (ParamIDs::delayTime, 0.24f);
+            set (ParamIDs::delayFeedback, 0.28f);
+            set (ParamIDs::chorusMix, 0.10f);
+            set (ParamIDs::reverbMix, 0.20f);
+            set (ParamIDs::oversampling, 2.0f);
+            set (ParamIDs::modSource (0), 4.0f);
+            set (ParamIDs::modDestination (0), 4.0f);
+            set (ParamIDs::modAmount (0), 0.18f);
+            break;
+
+        case 32:
+            // Vintage hard-sync lead, built from what the voice already has:
+            // a fast filter-envelope sweep plus heavy unison detune and drift
+            // stand in for the sync sweep without adding a sync oscillator.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.60f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.48f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, 19.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc3Level, 0.28f);
+            set (ParamIDs::osc3Coarse, 0.0f);
+            set (ParamIDs::osc3Fine, -19.0f);
+            set (ParamIDs::osc4Wave, 2.0f);
+            set (ParamIDs::osc4Level, 0.16f);
+            set (ParamIDs::osc4Coarse, -12.0f);
+            set (ParamIDs::unisonVoices, 6.0f);
+            set (ParamIDs::unisonDetune, 18.0f);
+            set (ParamIDs::unisonSpread, 0.72f);
+            set (ParamIDs::unisonPhase, 0.30f);
+            set (ParamIDs::unisonDrift, 0.50f);
+            set (ParamIDs::cutoff, 1100.0f);
+            set (ParamIDs::resonance, 0.48f);
+            set (ParamIDs::filterEnvAmount, 0.66f);
+            set (ParamIDs::filterAttack, 0.020f);
+            set (ParamIDs::filterDecay, 0.70f);
+            set (ParamIDs::filterSustain, 0.60f);
+            set (ParamIDs::filterRelease, 0.55f);
+            set (ParamIDs::attack, 0.016f);
+            set (ParamIDs::decay, 0.60f);
+            set (ParamIDs::sustain, 0.80f);
+            set (ParamIDs::release, 0.60f);
+            set (ParamIDs::envCurve, 0.30f);
+            set (ParamIDs::gain, 0.56f);
+            set (ParamIDs::drive, 0.16f);
+            set (ParamIDs::driveCurve, 2.0f);
+            set (ParamIDs::ampSat, 0.42f);
+            set (ParamIDs::lfoRate, 4.20f);
+            set (ParamIDs::lfoDepth, 0.10f);
+            set (ParamIDs::lfoPitch, 2.0f);
+            set (ParamIDs::velocityAmount, 0.50f);
+            set (ParamIDs::keyTracking, 0.28f);
+            set (ParamIDs::voiceVariance, 0.68f);
+            set (ParamIDs::fxWet, 0.20f);
+            set (ParamIDs::delayTime, 0.21f);
+            set (ParamIDs::delayFeedback, 0.34f);
+            set (ParamIDs::delayStereo, 0.40f);
+            set (ParamIDs::reverbMix, 0.18f);
+            set (ParamIDs::oversampling, 2.0f);
+            set (ParamIDs::modSource (0), 1.0f);
+            set (ParamIDs::modDestination (0), 2.0f);
+            set (ParamIDs::modAmount (0), 0.18f);
+            break;
+
+        case 33:
+            // Analog strings: two saws a fifth apart, slow chorus, and a
+            // wide stereo delay so the ensemble reads as a section.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc1Level, 0.52f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc2Level, 0.44f);
+            set (ParamIDs::osc2Coarse, 0.0f);
+            set (ParamIDs::osc2Fine, 7.0f);
+            set (ParamIDs::osc2Pan, 0.28f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc3Level, 0.24f);
+            set (ParamIDs::osc3Coarse, 12.0f);
+            set (ParamIDs::osc3Fine, -6.0f);
+            set (ParamIDs::osc3Pan, -0.32f);
+            set (ParamIDs::osc4Level, 0.0f);
+            set (ParamIDs::unisonVoices, 4.0f);
+            set (ParamIDs::unisonDetune, 9.0f);
+            set (ParamIDs::unisonSpread, 0.80f);
+            set (ParamIDs::unisonPhase, 0.40f);
+            set (ParamIDs::unisonDrift, 0.30f);
+            set (ParamIDs::cutoff, 2200.0f);
+            set (ParamIDs::resonance, 0.18f);
+            set (ParamIDs::filterEnvAmount, 0.26f);
+            set (ParamIDs::filterAttack, 0.80f);
+            set (ParamIDs::filterDecay, 1.80f);
+            set (ParamIDs::filterSustain, 0.78f);
+            set (ParamIDs::filterRelease, 1.60f);
+            set (ParamIDs::attack, 0.70f);
+            set (ParamIDs::decay, 1.20f);
+            set (ParamIDs::sustain, 0.88f);
+            set (ParamIDs::release, 1.90f);
+            set (ParamIDs::envCurve, 0.32f);
+            set (ParamIDs::gain, 0.56f);
+            set (ParamIDs::drive, 0.04f);
+            set (ParamIDs::ampSat, 0.16f);
+            set (ParamIDs::lfoRate, 0.07f);
+            set (ParamIDs::lfoDepth, 0.14f);
+            set (ParamIDs::velocityAmount, 0.42f);
+            set (ParamIDs::keyTracking, 0.38f);
+            set (ParamIDs::voiceVariance, 0.65f);
+            set (ParamIDs::fxWet, 0.50f);
+            set (ParamIDs::delayTime, 0.36f);
+            set (ParamIDs::delayFeedback, 0.32f);
+            set (ParamIDs::delayStereo, 0.80f);
+            set (ParamIDs::chorusDepth, 0.013f);
+            set (ParamIDs::chorusRate, 0.17f);
+            set (ParamIDs::chorusMix, 0.46f);
+            set (ParamIDs::reverbMix, 0.40f);
+            set (ParamIDs::reverbModulation, 0.22f);
+            set (ParamIDs::oversampling, 1.0f);
+            set (ParamIDs::modSource (0), 1.0f);
+            set (ParamIDs::modDestination (0), 2.0f);
+            set (ParamIDs::modAmount (0), 0.10f);
+            set (ParamIDs::modSource (1), 3.0f);
+            set (ParamIDs::modDestination (1), 1.0f);
+            set (ParamIDs::modAmount (1), 0.12f);
             break;
 
         default:
