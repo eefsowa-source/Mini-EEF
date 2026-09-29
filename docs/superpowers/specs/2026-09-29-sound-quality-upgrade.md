@@ -112,4 +112,8 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - P1.1 필터 드라이브 + 24 dB LPF24: 완료 (reports/2026-09-29-filter-drive-lpf24.md)
 - P1.2 지수형 앰프 엔벨로프: 완료 (reports/2026-09-29-envelope-curve.md)
 - P1.3 필터 전용 엔벨로프 + PWM 목적지: 완료 (reports/2026-09-29-filter-envelope-pwm.md)
-- P2 이하: 미착수
+- P2.1 보이스별 편차 (컷오프/엔벨로프 시간/레벨): 완료
+- P2.2 노이즈 스테레오 비상관 + 유니즌 레벨 drift: 완료
+- P2.3 hard sync / ring-mod: 제외 (보고서 근거 참조)
+- P2: 완료 (reports/2026-09-30-voice-variance-stereo-noise.md)
+- P3 이하: 미착수
