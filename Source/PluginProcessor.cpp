@@ -248,6 +248,39 @@ public:
         const auto* driftParameter = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
         driftLevel = driftParameter != nullptr
             ? juce::jlimit (0.0f, 1.0f, driftParameter->load()) : 0.0f;
+        // Non-zero deterministic seed avoids the xorshift zero lock-up while
+        // keeping note retriggers reproducible for offline rendering.
+        noiseState = 0x9e3779b9u ^ (static_cast<std::uint32_t> (midiNote + 1) * 0x85ebca6bu);
+        if (noiseState == 0)
+            noiseState = 0x6d2b79f5u;
+        // Roadmap P2: per-voice analog tolerance.  One deterministic seed per
+        // note fixes this voice's cutoff / envelope-time / level offsets, so
+        // a poly chord spreads the way separate voice cards would while the
+        // same note keeps reproducing exactly across offline renders.
+        varianceAmount = 0.0f;
+        if (const auto* varianceParameter = p.apvts.getRawParameterValue (ParamIDs::voiceVariance))
+            varianceAmount = juce::jlimit (0.0f, 1.0f, varianceParameter->load());
+        std::uint32_t varianceState = noiseState ^ 0xa136aaadu;
+        if (varianceState == 0)
+            varianceState = 0x6d2b79f5u;
+        // Zero amount keeps every multiplier at exactly 1.0 / +0.0, so legacy
+        // presets remain bit-identical instead of merely close.
+        cutoffVariance = 1.0f;
+        envelopeVariance = 1.0f;
+        levelVariance = 1.0f;
+        if (varianceAmount > 1.0e-5f)
+        {
+            constexpr float cutoffCentsRange = 40.0f;   // +/-0.40 semitones
+            constexpr float envelopeTimeRange = 0.25f;  // +/-25% stage times
+            constexpr float levelRange = 0.15f;         // +/-15% voice level
+            const float cutoffCents = cutoffCentsRange * varianceAmount
+                * (2.0f * unitRandomFromState (varianceState) - 1.0f);
+            cutoffVariance = std::pow (2.0f, cutoffCents / 1200.0f);
+            envelopeVariance = 1.0f + envelopeTimeRange * varianceAmount
+                * (2.0f * unitRandomFromState (varianceState) - 1.0f);
+            levelVariance = 1.0f + levelRange * varianceAmount
+                * (2.0f * unitRandomFromState (varianceState) - 1.0f);
+        }
         std::array<float, 4> phaseStart {};
         for (size_t oscillator = 0; oscillator < phaseStart.size(); ++oscillator)
         {
@@ -283,11 +316,6 @@ public:
             ph3[static_cast<size_t> (i)] = std::fmod (phaseStart[2] + 0.457f * i * phaseScale, 1.0f);
             ph4[static_cast<size_t> (i)] = std::fmod (phaseStart[3] + 0.619f * i * phaseScale, 1.0f);
         }
-        // Non-zero deterministic seed avoids the xorshift zero lock-up while
-        // keeping note retriggers reproducible for offline rendering.
-        noiseState = 0x9e3779b9u ^ (static_cast<std::uint32_t> (midiNote + 1) * 0x85ebca6bu);
-        if (noiseState == 0)
-            noiseState = 0x6d2b79f5u;
         // Per-layer drift wanderers restart from the same deterministic seed
         // chain as the noise source, so offline renders stay reproducible.
         for (int i = 0; i < maxUnisonVoices; ++i)
@@ -301,6 +329,23 @@ public:
         sahState = noiseState ^ 0x19326465u;
         if (sahState == 0)
             sahState = 0x6d2b79f5u;
+        // Roadmap P2: an independent right-channel seed decorrelates the two
+        // sides of the noise layer, which previously fed the identical sample
+        // to both channels.  The left seed chain is unchanged, so existing
+        // left-channel measurements keep their baseline.
+        noiseStateRight = noiseState ^ 0x27d4eb2fu;
+        if (noiseStateRight == 0)
+            noiseStateRight = 0x6d2b79f5u;
+        // Per-layer level drift, seeded like the detune wanderers.  Zero amount
+        // keeps every layer at unity gain.
+        for (int i = 0; i < maxUnisonVoices; ++i)
+        {
+            levelDriftState[static_cast<size_t> (i)]
+                = noiseState ^ (static_cast<std::uint32_t> (i + 1) * 0x85ebca6bu);
+            if (levelDriftState[static_cast<size_t> (i)] == 0)
+                levelDriftState[static_cast<size_t> (i)] = 0x6d2b79f5u;
+            levelDriftValue[static_cast<size_t> (i)] = 0.0f;
+        }
         previousLfoPhase = lfoPhase;
         lfoSample = 0.0f;
         ampEnvelopeState = EnvelopeCurveState {};
@@ -352,7 +397,13 @@ public:
         lfoSample = 0.0f;
         driftLevel = 0.0f;
         driftValue.fill (0.0f);
+        levelDriftValue.fill (0.0f);
         noiseState = 0x6d2b79f5u;
+        noiseStateRight = 0x6d2b79f5u;
+        varianceAmount = 0.0f;
+        cutoffVariance = 1.0f;
+        envelopeVariance = 1.0f;
+        levelVariance = 1.0f;
         ampEnvelopeState = EnvelopeCurveState {};
         filterEnvelopeState = EnvelopeCurveState {};
     }
@@ -593,7 +644,8 @@ public:
             const float keyRatio = std::pow (2.0f,
                 keyTrack * juce::jlimit (-2.0f, 2.0f, (static_cast<float> (note) - 60.0f) / 24.0f));
             const float modulatedCutoff = juce::jlimit (20.0f, 20000.0f,
-                baseCutoff * keyRatio * (1.0f + lfo * lfoDepth->load() + matrixCutoff)
+                baseCutoff * cutoffVariance * keyRatio
+                * (1.0f + lfo * lfoDepth->load() + matrixCutoff)
                 * filterEnvGain (filterEnvelope));
             const int wave1 = static_cast<int> (std::lround (w1->load()));
             const int wave2 = static_cast<int> (std::lround (w2->load()));
@@ -654,12 +706,16 @@ public:
                     oscillatorRight += samples[oscillator] * oscillatorLevel[oscillator] * right * nyquistGain;
                 }
                 const float noise = noiseMix * whiteNoiseSample (noiseState);
+                // Independent right-channel noise: the two sides no longer
+                // carry the identical sample, which is what gave the noise
+                // layer its unnaturally focused phantom centre.
+                const float noiseRight = noiseMix * whiteNoiseSample (noiseStateRight);
                 // A fixed conservative bus gain preserves each Level knob's
                 // meaning.  Dividing by the sum of active levels made one
                 // oscillator sound equally loud at every non-zero setting.
                 constexpr float oscillatorBusGain = 0.35f;
                 oscillatorLeft = (oscillatorLeft + noise * 0.70710678f) * oscillatorBusGain;
-                oscillatorRight = (oscillatorRight + noise * 0.70710678f) * oscillatorBusGain;
+                oscillatorRight = (oscillatorRight + noiseRight * 0.70710678f) * oscillatorBusGain;
                 // Equal-power-ish gains with a unity centre preserve the old
                 // mono result at spread=0 while keeping wide layers bounded.
                 const float positionNorm = activeUnisonVoices > 1
@@ -669,8 +725,13 @@ public:
                 const float panAngle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
                 const float panGainLeft = std::cos (panAngle);
                 const float panGainRight = std::sin (panAngle);
-                unisonLeft += oscillatorLeft * panGainLeft;
-                unisonRight += oscillatorRight * panGainRight;
+                // Per-layer level drift, the amplitude counterpart of the
+                // existing detune wanderer.  At drift 0 the multiplier is
+                // exactly 1.0, so the unison mix stays bit-identical.
+                const float layerLevel = 1.0f + driftLevel * 0.35f
+                    * levelDriftValue[static_cast<size_t> (unison)];
+                unisonLeft += oscillatorLeft * panGainLeft * layerLevel;
+                unisonRight += oscillatorRight * panGainRight * layerLevel;
                 phase1 = std::fmod (phase1 + increment[0], 1.0f);
                 phase2 = std::fmod (phase2 + increment[1], 1.0f);
                 phase3 = std::fmod (phase3 + increment[2], 1.0f);
@@ -679,6 +740,10 @@ public:
                     * 0.0003f * (unitRandomFromState (driftState[static_cast<size_t> (unison)]) - 0.5f);
                 driftValue[static_cast<size_t> (unison)] = juce::jlimit (-1.0f, 1.0f,
                     driftValue[static_cast<size_t> (unison)]);
+                levelDriftValue[static_cast<size_t> (unison)] = juce::jlimit (-1.0f, 1.0f,
+                    levelDriftValue[static_cast<size_t> (unison)]
+                    + driftLevel * 0.0004f
+                        * (unitRandomFromState (levelDriftState[static_cast<size_t> (unison)]) - 0.5f));
             }
             const float unisonScale = 1.0f / static_cast<float> (activeUnisonVoices);
             unisonLeft *= unisonScale;
@@ -689,7 +754,7 @@ public:
             // to zero at the negative LFO peak, while depth=0 is bit-identical
             // to the previous signal path.
             const float amGain = 1.0f - 0.5f * amDepth + 0.5f * amDepth * lfo;
-            const float voiceGain = envelope * velocityGain * outputGain * amGain
+            const float voiceGain = envelope * velocityGain * outputGain * amGain * levelVariance
                                   * juce::jlimit (0.0f, 2.0f, 1.0f + matrixAmp);
             // TPT state-variable filter.  The integrator states are local to
             // each voice, so fast cutoff automation and high resonance remain
@@ -805,6 +870,15 @@ private:
         parameters.decay = p.apvts.getRawParameterValue (ParamIDs::decay)->load();
         parameters.sustain = p.apvts.getRawParameterValue (ParamIDs::sustain)->load();
         parameters.release = p.apvts.getRawParameterValue (ParamIDs::release)->load();
+        // Roadmap P2: the seeded envelope-time offset scales every stage of
+        // this voice only.  At variance 0 the multiplier is exactly 1.0 and
+        // the four timings reach juce::ADSR unchanged.
+        if (envelopeVariance != 1.0f)
+        {
+            parameters.attack *= envelopeVariance;
+            parameters.decay *= envelopeVariance;
+            parameters.release *= envelopeVariance;
+        }
         env.setParameters (parameters);
         sustainLevel = juce::jlimit (0.0f, 1.0f, parameters.sustain);
 
@@ -819,6 +893,12 @@ private:
         filterParameters.decay = readOr (ParamIDs::filterDecay, 0.3f);
         filterParameters.sustain = readOr (ParamIDs::filterSustain, 0.8f);
         filterParameters.release = readOr (ParamIDs::filterRelease, 0.4f);
+        if (envelopeVariance != 1.0f)
+        {
+            filterParameters.attack *= envelopeVariance;
+            filterParameters.decay *= envelopeVariance;
+            filterParameters.release *= envelopeVariance;
+        }
         filterEnv.setParameters (filterParameters);
         filterSustainLevel = juce::jlimit (0.0f, 1.0f, filterParameters.sustain);
     }
@@ -878,6 +958,10 @@ private:
     static constexpr float driftDetuneFallbackCents = 12.0f;
     std::array<float, maxUnisonVoices> driftValue {};
     std::array<std::uint32_t, maxUnisonVoices> driftState {};
+    // Roadmap P2: per-layer level wander and the decorrelated right-channel
+    // noise seed, both seeded from the same deterministic note chain.
+    std::array<float, maxUnisonVoices> levelDriftValue {};
+    std::array<std::uint32_t, maxUnisonVoices> levelDriftState {};
     std::uint32_t sahState = 0x6d2b79f5u;
     static float unitRandomFromState (std::uint32_t& stateValue) noexcept
     {
@@ -892,6 +976,11 @@ private:
     std::array<float, 2> svfIc3 {}, svfIc4 {};
     std::array<float, 2> filterInputPrev {};
     std::uint32_t noiseState = 0x6d2b79f5u;
+    std::uint32_t noiseStateRight = 0x6d2b79f5u;
+    // Roadmap P2 per-voice tolerance.  The three multipliers stay at exactly
+    // 1.0 while the variance amount is zero, so the legacy path is unchanged.
+    float varianceAmount = 0.0f;
+    float cutoffVariance = 1.0f, envelopeVariance = 1.0f, levelVariance = 1.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
     juce::SmoothedValue<float> resonanceSmooth;
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
@@ -1156,6 +1245,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::unisonSpread, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::unisonPhase, 0.0f, 1.0f, 1.0f);
     addFloat (ParamIDs::unisonDrift, 0.0f, 1.0f, 0.0f);
+    addFloat (ParamIDs::voiceVariance, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::cutoff, 20.0f, 20000.0f, 12000.0f);
     addFloat (ParamIDs::resonance, 0.0f, 1.0f, 0.15f);
     addFloat (ParamIDs::filterDrive, 0.0f, 1.0f, 0.0f);

@@ -36,6 +36,11 @@ inline constexpr auto unisonDetune = "unisonDetune";
 inline constexpr auto unisonSpread = "unisonSpread";
 inline constexpr auto unisonPhase = "unisonPhase";
 inline constexpr auto unisonDrift = "unisonDrift";
+// Per-voice analog tolerance: seeded cutoff / envelope-time / level offsets
+// per poly voice, modelling the fixed spread between voice cards.  The 0
+// default leaves every multiplier at exactly 1.0, so existing presets keep
+// their measured output bit-for-bit.
+inline constexpr auto voiceVariance = "voiceVariance";
 inline constexpr auto voiceMode = "voiceMode";
 inline constexpr auto cutoff = "cutoff";
 inline constexpr auto resonance = "resonance";
@@ -109,5 +114,5 @@ inline constexpr const char* modAmount (int index) {
 // Matrix source/destination indices are fixed in the current state format.
 // Source 0 is off, 1-3 are LFO/envelope/velocity and 4 is oscillator 1
 // (audio-rate FM source). Legacy source 4/5/6 states are migrated on load.
-// Destination 0 is off, 1-4 are pitch/cutoff/amp/oscillator-2 FM.
+// Destination 0 is off, 1-5 are pitch/cutoff/amp/oscillator-2 FM/PWM.
 }

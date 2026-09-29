@@ -23,6 +23,10 @@ constexpr int moduleGap = 10;
 constexpr int oscillatorHeight = 430;
 constexpr int oscillatorCardsHeight = 342;
 constexpr int oscillatorStripHeight = 78;
+// The strip carries eight knobs (unison/voice/noise/AM).  Its knob row is
+// laid out from stripKnobX to the right margin, so the per-knob width falls
+// as controls are added; the row height below is sized to keep each dial
+// legible at the 1200 px minimum editor width.
 constexpr int lowerSectionHeight = 180;
 constexpr int fxHeight = 108;
 constexpr int bottomMargin = 16;
@@ -111,7 +115,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     }
     // Short engraved labels keep all six filter/output knobs legible at the
     // 1200 px minimum width; the full names stay on the parameters themselves.
-    noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); unisonDriftAttachment=bind(unisonDrift,ParamIDs::unisonDrift,"DRIFT"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); envCurveAttachment=bind(envCurve,ParamIDs::envCurve,"ENV CRV"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF"); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESO"); filterDriveAttachment=bind(filterDrive,ParamIDs::filterDrive,"FLT DRV"); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT"); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE"); ampSatAttachment=bind(ampSaturation,ParamIDs::ampSat,"SAT");
+    noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); unisonDriftAttachment=bind(unisonDrift,ParamIDs::unisonDrift,"DRIFT"); voiceVarianceAttachment=bind(voiceVariance,ParamIDs::voiceVariance,"VOICE VAR"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); envCurveAttachment=bind(envCurve,ParamIDs::envCurve,"ENV CRV"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF"); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESO"); filterDriveAttachment=bind(filterDrive,ParamIDs::filterDrive,"FLT DRV"); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT"); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE"); ampSatAttachment=bind(ampSaturation,ParamIDs::ampSat,"SAT");
     lfoRateAttachment=bind(lfoRate,ParamIDs::lfoRate,"LFO RATE"); lfoDepthAttachment=bind(lfoDepth,ParamIDs::lfoDepth,"LFO CUTOFF"); lfoPitchAttachment=bind(lfoPitch,ParamIDs::lfoPitch,"LFO PITCH"); velocityAttachment=bind(velocityAmount,ParamIDs::velocityAmount,"VELOCITY");
     filterAttackAttachment=bind(filterAttack,ParamIDs::filterAttack,"F ATK"); filterDecayAttachment=bind(filterDecay,ParamIDs::filterDecay,"F DEC"); filterSustainAttachment=bind(filterSustain,ParamIDs::filterSustain,"F SUS"); filterReleaseAttachment=bind(filterRelease,ParamIDs::filterRelease,"F REL"); filterEnvAmountAttachment=bind(filterEnvAmount,ParamIDs::filterEnvAmount,"F AMT");
     fxWetAttachment=bind(fxWet,ParamIDs::fxWet,"FX WET"); delayTimeAttachment=bind(delayTime,ParamIDs::delayTime,"DLY TIME"); delayFeedbackAttachment=bind(delayFeedback,ParamIDs::delayFeedback,"DLY FDBK"); chorusDepthAttachment=bind(chorusDepth,ParamIDs::chorusDepth,"CHO DEPTH"); chorusRateAttachment=bind(chorusRate,ParamIDs::chorusRate,"CHO RATE"); chorusMixAttachment=bind(chorusMix,ParamIDs::chorusMix,"CHO MIX"); reverbMixAttachment=bind(reverbMix,ParamIDs::reverbMix,"REVERB");
@@ -360,15 +364,21 @@ void EonMiniEEFEditor::resized()
     const int stripY = top + oscillatorCardsHeight + gap;
     voiceMode.setBounds (m + 14, stripY + 40, 142, 26);
     const int stripKnobX = m + 170;
-    const int stripKnobW = (w - stripKnobX - m - 12) / 7;
-    std::array<juce::Slider*, 7> stripControls {
-        &unisonVoices, &unisonDetune, &unisonSpread, &unisonPhase, &unisonDrift, &noiseMix, &amDepth
+    const int stripKnobW = (w - stripKnobX - m - 12) / 8;
+    std::array<juce::Slider*, 8> stripControls {
+        &unisonVoices, &unisonDetune, &unisonSpread, &unisonPhase, &unisonDrift,
+        &voiceVariance, &noiseMix, &amDepth
     };
-    // The strip divides its width by seven; leaving the loop at six rendered
-    // the AM DEPTH control bound but invisible (no bounds were ever set).
+    // The strip divides its width by eight; leaving the loop short renders
+    // the trailing controls bound but invisible (no bounds were ever set).
+    // The dial diameter is capped by this row height, not by the column width,
+    // so the row uses the full strip height below the title rule.  Eight
+    // controls share the width; the height is what keeps them legible.
+    const int stripKnobY = stripY + 27;
+    const int stripKnobH = oscillatorStripHeight - 30;
     for (int control = 0; control < static_cast<int> (stripControls.size()); ++control)
         stripControls[static_cast<size_t> (control)]->setBounds (
-            stripKnobX + control * stripKnobW, stripY + 30, stripKnobW - 4, 44);
+            stripKnobX + control * stripKnobW, stripKnobY, stripKnobW - 4, stripKnobH);
     const int fxY = h - bottomMargin - fxHeight;
     const int lowerY = top + topH + gap;
     const int lowerH = lowerSectionHeight;
@@ -411,7 +421,10 @@ void EonMiniEEFEditor::resized()
     const int modW = w - modX - m - 12;
     x = modX; const int modKnobW = juce::jmax (52, (modW - 24) / 4);
     for (auto* s : { &lfoRate, &lfoDepth, &lfoPitch, &velocityAmount }) { s->setBounds (x, lowerY + 45, modKnobW, lowerH - 54); x += modKnobW + 8; }
-    lfoShapeMode.setBounds (modX, lowerY + 8, modKnobW + 8, 24);
+    // The shape selector belongs in the panel's empty title row, to the right
+    // of the caption.  At the panel's left corner it covered the caption text
+    // and made the title unreadable.
+    lfoShapeMode.setBounds (modX + modW - 78, lowerY + 8, 78, 24);
     const int fxW = (w - 2 * m - 60) / 7; x = m + 12;
     for (auto* s : { &fxWet, &delayTime, &delayFeedback, &chorusDepth, &chorusRate, &chorusMix, &reverbMix }) { s->setBounds (x, fxY + 30, fxW, 74); x += fxW + 6; }
 }
