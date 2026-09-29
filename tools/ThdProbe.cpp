@@ -75,6 +75,21 @@ void setDriveCurve (EonMiniEEFProcessor& probe, int curve)
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (static_cast<float> (curve)));
 }
 
+// P1 filter probe controls: per-voice filter drive amount, cutoff, and the
+// filter topology (0=LPF legacy, 3=LPF24 cascade).
+void setFilterProbe (EonMiniEEFProcessor& probe, float filterDriveValue,
+                     float cutoffValue, int filterModeValue)
+{
+    const auto setPlain = [&probe] (const char* id, float plainValue)
+    {
+        if (auto* parameter = probe.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+    setPlain (ParamIDs::filterDrive, filterDriveValue);
+    setPlain (ParamIDs::cutoff, cutoffValue);
+    setPlain (ParamIDs::filterMode, static_cast<float> (filterModeValue));
+}
+
 void renderDroneWindow (EonMiniEEFProcessor& probe, std::array<float, analysisLength>& window)
 {
     probe.prepareToPlay (probeSampleRate, probeBlockSize);
@@ -239,8 +254,82 @@ int main()
                   << " | " << r.harmonicDb[0] << " | " << r.harmonicDb[1]
                   << " | " << r.harmonicDb[2] << " | " << r.harmonicDb[3]
                   << " | " << r.harmonicDb[4]
+                      << " | " << r.dcDb
+                      << " | " << r.aliasRatio
+                      << " | " << r.aliasRatioDeep << " |\n";
+    }
+
+    // P1 probe: per-voice filter drive on the LP modes.  The curve is
+    // evaluated inside the selective 2x filter path, so the deep fold line
+    // quantifies how much drive non-linearity still aliases at the host
+    // rate.  The global drive stays at zero throughout this section.
+    constexpr std::array<float, 3> filterDriveLevels { 0.0f, 0.5f, 1.0f };
+    constexpr std::array<int, 2> lpModes { 0, 3 };
+    constexpr std::array<const char*, 2> lpModeNames { "LPF", "LPF24" };
+    std::array<std::array<DriveReport, 2>, 3> filterReports {};
+    std::cout << "| filterDrive | filter | THD % | H2 dB | H3 dB | H5 dB | DC dB | alias deep |\n"
+              << "|---|---|---|---|---|---|---|---|\n";
+    for (size_t fdIndex = 0; fdIndex < filterDriveLevels.size(); ++fdIndex)
+    {
+        for (size_t modeIndex = 0; modeIndex < lpModes.size(); ++modeIndex)
+        {
+            EonMiniEEFProcessor probe;
+            if (! configureSineProbe (probe, 0.0f))
+            {
+                std::cerr << "filter probe could not configure the sine voice\n";
+                return 1;
+            }
+            setOversamplingMode (probe, 2);
+            setFilterProbe (probe, filterDriveLevels[fdIndex], 20000.0f,
+                            lpModes[modeIndex]);
+
+            std::array<float, analysisLength> window {};
+            renderDroneWindow (probe, window);
+            for (const float sample : window)
+                if (! std::isfinite (sample))
+                {
+                    std::cerr << "filter probe produced non-finite output (filterDrive="
+                              << filterDriveLevels[fdIndex] << ")\n";
+                    return 1;
+                }
+
+            filterReports[fdIndex][modeIndex] = analyseWindow (window);
+            const auto& r = filterReports[fdIndex][modeIndex];
+            std::cout << "| " << filterDriveLevels[fdIndex]
+                      << " | " << lpModeNames[modeIndex]
+                      << " | " << (100.0 * r.thd)
+                      << " | " << r.harmonicDb[0]
+                      << " | " << r.harmonicDb[1]
+                      << " | " << r.harmonicDb[3]
+                      << " | " << r.dcDb
+                      << " | " << r.aliasRatioDeep << " |\n";
+        }
+    }
+
+    // Rolloff check: cutoff 4 kHz with drive 0.5 puts the driven H5 (8.8 kHz)
+    // about one octave into the stopband, where the 24 dB/oct cascade must
+    // land clearly below the 12 dB/oct path.
+    std::array<DriveReport, 2> rolloffReports {};
+    for (size_t modeIndex = 0; modeIndex < lpModes.size(); ++modeIndex)
+    {
+        EonMiniEEFProcessor probe;
+        if (! configureSineProbe (probe, 0.0f))
+        {
+            std::cerr << "rolloff probe could not configure the sine voice\n";
+            return 1;
+        }
+        setOversamplingMode (probe, 2);
+        setFilterProbe (probe, 0.5f, 4000.0f, lpModes[modeIndex]);
+        std::array<float, analysisLength> window {};
+        renderDroneWindow (probe, window);
+        rolloffReports[modeIndex] = analyseWindow (window);
+        const auto& r = rolloffReports[modeIndex];
+        std::cout << "| rolloff 4k | " << lpModeNames[modeIndex]
+                  << " | " << (100.0 * r.thd)
+                  << " | " << r.harmonicDb[0]
+                  << " | " << r.harmonicDb[1]
+                  << " | " << r.harmonicDb[3]
                   << " | " << r.dcDb
-                  << " | " << r.aliasRatio
                   << " | " << r.aliasRatioDeep << " |\n";
     }
 
@@ -263,6 +352,20 @@ int main()
         for (const auto& report : perDrive)
             dcControlled = dcControlled && report.dcDb < -30.0;
 
+    // P1 gates: the filter drive must add audible harmonics while staying
+    // bounded and DC-controlled, and LPF24 must beat LPF stopband attenuation
+    // by a clear margin on the one-octave-down harmonic.
+    const bool filterDriveAddsHarmonics
+        = filterReports[2][0].thd > filterReports[0][0].thd + 0.002
+       && filterReports[2][1].thd > filterReports[0][1].thd + 0.002;
+    bool filterDriveBounded = true;
+    for (const auto& perLevel : filterReports)
+        for (const auto& report : perLevel)
+            filterDriveBounded = filterDriveBounded && std::isfinite (report.thd)
+                && report.thd < 1.0 && report.dcDb < -30.0;
+    const bool lp24Steeper
+        = rolloffReports[1].harmonicDb[3] < rolloffReports[0].harmonicDb[3] - 6.0;
+
     // Aliasing is not gated here: a single sine into tanh() at these levels
     // keeps the 15th+ fold lines below the window-leakage floor, so a
     // fold-line ratio would compare floor noise. The deep-clip pulse drone
@@ -274,10 +377,14 @@ int main()
               << " curvesDistinct=" << (curvesDistinct ? "PASS" : "FAIL")
               << " curvesBounded=" << (curvesBounded ? "PASS" : "FAIL")
               << " curvesDcOk=" << (curvesDcOk ? "PASS" : "FAIL")
+              << " filterDriveAddsHarmonics=" << (filterDriveAddsHarmonics ? "PASS" : "FAIL")
+              << " filterDriveBounded=" << (filterDriveBounded ? "PASS" : "FAIL")
+              << " lp24Steeper=" << (lp24Steeper ? "PASS" : "FAIL")
               << " (alias gating owned by PresetSmoke regression)\n";
 
     if (! cleanSine || ! driveAddsHarmonics || ! dcControlled
-        || ! curvesDistinct || ! curvesBounded || ! curvesDcOk)
+        || ! curvesDistinct || ! curvesBounded || ! curvesDcOk
+        || ! filterDriveAddsHarmonics || ! filterDriveBounded || ! lp24Steeper)
     {
         std::cerr << "THD drive baseline gate failed\n";
         return 1;
