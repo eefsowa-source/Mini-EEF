@@ -32,7 +32,15 @@ const juce::StringArray fileNames {
     "23_octave_stab.eonpreset",
     "24_deep_drone.eonpreset",
     "25_percussive_click.eonpreset",
-    "26_classic_pwm.eonpreset"
+    "26_classic_pwm.eonpreset",
+    "27_minimoog_lead.eonpreset",
+    "28_moog_bass.eonpreset",
+    "29_diva_saw_pad.eonpreset",
+    "30_juno_pad.eonpreset",
+    "31_prophet_brass.eonpreset",
+    "32_minifreak_pluck.eonpreset",
+    "33_sync_sweep_lead.eonpreset",
+    "34_analog_strings.eonpreset"
 };
 
 bool hasMatchingParameterValues (const EonMiniEEFProcessor& first,

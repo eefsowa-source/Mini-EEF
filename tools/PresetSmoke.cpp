@@ -165,7 +165,7 @@ int runFactoryPresetContractRegression()
         "Wide Brass", "Soft Organ", "Juno Choir", "Motion Pad", "FMish Bass", "Rubber Mono",
         "Resonant Sweep", "Noise SFX", "Lo-Fi Keys", "Dream Lead", "Octave Stab", "Deep Drone",
         "Percussive Click", "Classic PWM", "Minimoog Lead", "Moog Bass", "Diva Saw Pad",
-        "Juno Pad", "Prophet Brass", "Minifreak Pluck", "Vintage Sync Lead", "Analog Strings"
+        "Juno Pad", "Prophet Brass", "Minifreak Pluck", "Sync Sweep Lead", "Analog Strings"
     };
     const auto& actualNames = FactoryPresets::names();
     bool namesMatch = actualNames.size() == expectedNames.size();

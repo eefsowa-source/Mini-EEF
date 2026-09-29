@@ -36,3 +36,18 @@ DSP 수치 스모크 테스트(파형 유한값/DC, TPT 필터 안정성, 대표
 ```sh
 python3 scripts/run_dsp_sanity.py
 ```
+
+## 공장 프리셋 내보내기
+
+`Presets/`의 `.eonpreset` 파일은 `FactoryPresets::names()`에서 생성됩니다. 공장
+프리셋을 추가하거나 이름을 바꾸면 두 목록을 맞춰 `ExportFactoryPresets`를 다시
+돌려 파일을 갱신해야 합니다.
+
+```sh
+cmake --build build --config Release --target EonMiniEEF_FactoryPresetExport
+build/EonMiniEEF_FactoryPresetExport
+```
+
+내보내기는 목록 길이가 `FactoryPresets::names()`와 다르면 실패합니다. 새 파라미터를
+추가한 경우 저장된 `.eonpreset`가 그 파라미터를 담지 않으므로, `getParameters()`에
+추가한 파라미터가 있으면 재생성이 필요합니다.

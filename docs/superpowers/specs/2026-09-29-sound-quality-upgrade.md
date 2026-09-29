@@ -119,8 +119,11 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - 매트릭스 소스 5 = 전용 필터 엔벨로프 (Diva의 S&H Env 류). 레거시 상태는
   source 5를 이미 off로 정규화하고 있어 저장 상태가 예기치 않게 바뀌지 않는다.
 - 공장 프리셋 8종 추가 (Minimoog Lead / Moog Bass / Diva Saw Pad / Juno Pad /
-  Prophet Brass / Minifreak Pluck / Vintage Sync Lead / Analog Strings).
+  Prophet Brass / Minifreak Pluck / Sync Sweep Lead / Analog Strings).
   렌더 peak 0.068-0.230으로 기존 26종의 0.098-0.226 범위 안에 있다.
+- `Presets/*.eonpreset` 재생성. 이전 파일은 10개 파라미터(filter env, voice
+  variance, env curve, delayStereo, reverbModulation, filterDrive)가 추가된 뒤 한 번도
+  갱신되지 않았다. 기존 26종의 값은 변경 없고 새 파라미터만 추가된다.
 - P3.1 리버 comb 변조: 완료
 - P3.2 델레이 스테레오 폭: 완료
 - P3.3 ampSat/limiter를 오버샘플 경로로 이동: 완료

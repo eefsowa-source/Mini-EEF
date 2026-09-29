@@ -39,7 +39,7 @@ const juce::StringArray& names()
         "Lo-Fi Keys", "Dream Lead", "Octave Stab", "Deep Drone",
         "Percussive Click", "Classic PWM"
         , "Minimoog Lead", "Moog Bass", "Diva Saw Pad", "Juno Pad"
-        , "Prophet Brass", "Minifreak Pluck", "Vintage Sync Lead"
+        , "Prophet Brass", "Minifreak Pluck", "Sync Sweep Lead"
         , "Analog Strings"
     };
     return presetNames;
@@ -1206,9 +1206,10 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 32:
-            // Vintage hard-sync lead, built from what the voice already has:
-            // a fast filter-envelope sweep plus heavy unison detune and drift
-            // stand in for the sync sweep without adding a sync oscillator.
+            // Sync-sweep lead built from what the voice already has: a fast
+            // filter-envelope sweep plus heavy unison detune and drift.  The
+            // name describes the sweep, not a hard-sync oscillator, which
+            // this engine does not implement.
             set (ParamIDs::osc1Wave, 0.0f);
             set (ParamIDs::osc1Level, 0.60f);
             set (ParamIDs::osc2Wave, 0.0f);
