@@ -131,6 +131,49 @@ double envelopePeakAt (const std::array<float, Capacity>& window, int centreSamp
     return peak;
 }
 
+template <size_t Capacity>
+double rmsBetween (const std::array<float, Capacity>& window, int start, int length)
+{
+    double sum = 0.0;
+    const int first = juce::jmax (0, start);
+    const int last = juce::jmin (static_cast<int> (Capacity), start + length);
+    for (int index = first; index < last; ++index)
+    {
+        const double value = static_cast<double> (window[static_cast<size_t> (index)]);
+        sum += value * value;
+    }
+    return std::sqrt (sum / static_cast<double> (juce::jmax (1, last - first)));
+}
+
+// P1.3 probe helpers: modulation-matrix routing and the dedicated filter
+// envelope stage times.
+void setModSlot (EonMiniEEFProcessor& probe, int slot, int source, int destination, float amount)
+{
+    const auto setPlain = [&probe] (const char* id, float plainValue)
+    {
+        if (auto* parameter = probe.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+    setPlain (ParamIDs::modSource (slot), static_cast<float> (source));
+    setPlain (ParamIDs::modDestination (slot), static_cast<float> (destination));
+    setPlain (ParamIDs::modAmount (slot), amount);
+}
+
+void setFilterEnvelope (EonMiniEEFProcessor& probe, float attack, float decay,
+                        float sustain, float release, float amount)
+{
+    const auto setPlain = [&probe] (const char* id, float plainValue)
+    {
+        if (auto* parameter = probe.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+    setPlain (ParamIDs::filterAttack, attack);
+    setPlain (ParamIDs::filterDecay, decay);
+    setPlain (ParamIDs::filterSustain, sustain);
+    setPlain (ParamIDs::filterRelease, release);
+    setPlain (ParamIDs::filterEnvAmount, amount);
+}
+
 void renderDroneWindow (EonMiniEEFProcessor& probe, std::array<float, analysisLength>& window)
 {
     probe.prepareToPlay (probeSampleRate, probeBlockSize);
@@ -449,6 +492,102 @@ int main()
                   << " | " << report.releaseThreeQuarter << " |\n";
     }
 
+    // P1.3 probe: dedicated filter envelope.  A saw through a low cutoff makes
+    // the sweep visible as a large RMS change between the start of the note
+    // and the settled sustain, and amount 0 must stay static.
+    struct FilterSweepReport { double early = 0.0, late = 0.0, ratio = 0.0; };
+    constexpr std::array<float, 2> filterEnvAmounts { 0.0f, 1.0f };
+    std::array<FilterSweepReport, 2> filterEnvReports {};
+    std::cout << "| filterEnvAmount | early rms | late rms | ratio |\n|---|---|---|---|\n";
+    for (size_t index = 0; index < filterEnvAmounts.size(); ++index)
+    {
+        EonMiniEEFProcessor probe;
+        if (! configureSineProbe (probe, 0.0f))
+        {
+            std::cerr << "filter envelope probe could not configure the sine voice\n";
+            return 1;
+        }
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        setPlain (ParamIDs::osc1Wave, 0.0f);   // saw, so the sweep moves real energy
+        setPlain (ParamIDs::cutoff, 300.0f);
+        setPlain (ParamIDs::resonance, 0.2f);
+        setPlain (ParamIDs::filterMode, 0.0f);
+        setPlain (ParamIDs::attack, 0.001f);
+        setPlain (ParamIDs::decay, 0.001f);
+        setPlain (ParamIDs::sustain, 1.0f);
+        setPlain (ParamIDs::release, 0.001f);
+        setPlain (ParamIDs::envCurve, 0.0f);
+        setOversamplingMode (probe, 0);
+        setFilterEnvelope (probe, 0.001f, 0.08f, 0.0f, 0.08f, filterEnvAmounts[index]);
+
+        std::array<float, analysisLength> window {};
+        renderNoteWindow (probe, analysisLength + 1000, window);
+        for (const float sample : window)
+            if (! std::isfinite (sample))
+            {
+                std::cerr << "filter envelope probe produced non-finite output\n";
+                return 1;
+            }
+
+        auto& report = filterEnvReports[index];
+        report.early = rmsBetween (window, 1000, 2048);
+        report.late = rmsBetween (window, 22000, 2048);
+        report.ratio = report.early / juce::jmax (1.0e-9, report.late);
+        std::cout << "| " << filterEnvAmounts[index]
+                  << " | " << report.early
+                  << " | " << report.late
+                  << " | " << report.ratio << " |\n";
+    }
+
+    // P1.3 probe: PWM matrix destination.  A 50% pulse has almost no second
+    // harmonic, so routing the LFO to PWM must lift H2 by a wide margin.
+    constexpr std::array<int, 2> pwmDestinations { 0, 5 };
+    std::array<double, 2> pwmSecondHarmonic {};
+    std::cout << "| pwm destination | H2 dB |\n|---|---|\n";
+    for (size_t index = 0; index < pwmDestinations.size(); ++index)
+    {
+        EonMiniEEFProcessor probe;
+        if (! configureSineProbe (probe, 0.0f))
+        {
+            std::cerr << "pwm probe could not configure the sine voice\n";
+            return 1;
+        }
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        setPlain (ParamIDs::osc1Wave, 1.0f);       // square
+        setPlain (ParamIDs::osc1PulseWidth, 0.5f);
+        setPlain (ParamIDs::cutoff, 20000.0f);
+        setPlain (ParamIDs::resonance, 0.0f);
+        setPlain (ParamIDs::attack, 0.001f);
+        setPlain (ParamIDs::decay, 0.001f);
+        setPlain (ParamIDs::sustain, 1.0f);
+        setPlain (ParamIDs::release, 0.001f);
+        setPlain (ParamIDs::lfoRate, 2.0f);
+        setPlain (ParamIDs::lfoDepth, 0.0f);
+        setPlain (ParamIDs::lfoPitch, 0.0f);
+        setModSlot (probe, 0, 1, pwmDestinations[index], 1.0f);
+
+        std::array<float, analysisLength> window {};
+        renderDroneWindow (probe, window);
+        for (const float sample : window)
+            if (! std::isfinite (sample))
+            {
+                std::cerr << "pwm probe produced non-finite output\n";
+                return 1;
+            }
+
+        pwmSecondHarmonic[index] = analyseWindow (window).harmonicDb[0];
+        std::cout << "| " << pwmDestinations[index]
+                  << " | " << pwmSecondHarmonic[index] << " |\n";
+    }
+
     // Gates. The THD numbers document the tanh() baseline; the structural
     // assertions catch regressions, not tuning preferences.
     const bool cleanSine = reports[0][0].thd < 0.01;
@@ -497,6 +636,14 @@ int main()
         = std::isfinite (envelopeReports[0].peak) && std::isfinite (envelopeReports[1].peak)
        && envelopeReports[0].peak <= 1.05 && envelopeReports[1].peak <= 1.05;
 
+    // P1.3 gates: the filter envelope must actually move the cutoff (large RMS
+    // ratio at full amount) while amount 0 stays static, and the PWM matrix
+    // destination must add second-harmonic content that a plain 50% pulse does
+    // not have.
+    const bool filterEnvSweepsCutoff = filterEnvReports[1].ratio > 3.0;
+    const bool filterEnvAmountOffStatic = filterEnvReports[0].ratio < 1.3;
+    const bool pwmDestinationWorks = pwmSecondHarmonic[1] > pwmSecondHarmonic[0] + 20.0;
+
     // Aliasing is not gated here: a single sine into tanh() at these levels
     // keeps the 15th+ fold lines below the window-leakage floor, so a
     // fold-line ratio would compare floor noise. The deep-clip pulse drone
@@ -515,13 +662,18 @@ int main()
               << " envCurveReleaseFaster=" << (envCurveReleaseFaster ? "PASS" : "FAIL")
               << " envCurveSustainHeld=" << (envCurveSustainHeld ? "PASS" : "FAIL")
               << " envCurveBounded=" << (envCurveBounded ? "PASS" : "FAIL")
+              << " filterEnvSweepsCutoff=" << (filterEnvSweepsCutoff ? "PASS" : "FAIL")
+              << " filterEnvAmountOffStatic=" << (filterEnvAmountOffStatic ? "PASS" : "FAIL")
+              << " pwmDestinationWorks=" << (pwmDestinationWorks ? "PASS" : "FAIL")
               << " (alias gating owned by PresetSmoke regression)\n";
 
     if (! cleanSine || ! driveAddsHarmonics || ! dcControlled
         || ! curvesDistinct || ! curvesBounded || ! curvesDcOk
         || ! filterDriveAddsHarmonics || ! filterDriveBounded || ! lp24Steeper
         || ! envCurveAttackFaster || ! envCurveReleaseFaster
-        || ! envCurveSustainHeld || ! envCurveBounded)
+        || ! envCurveSustainHeld || ! envCurveBounded
+        || ! filterEnvSweepsCutoff || ! filterEnvAmountOffStatic
+        || ! pwmDestinationWorks)
     {
         std::cerr << "THD drive baseline gate failed\n";
         return 1;
