@@ -41,14 +41,15 @@ target_link_libraries(EonMiniEEF PRIVATE juce::juce_audio_utils juce::juce_dsp)
 # Small offline renderer used by CI/design reviews to verify the editor skin
 # without opening a DAW. It never participates in the plugin targets.
 add_executable(EonMiniEEF_UISnapshot tools/UiSnapshot.cpp)
-# Renders the editor at the supported minimum window size.  The dial grades in
-# Source/PluginEditor.h are drawn from a constant, so this target is what proves
-# the engraved captions still have their own line at 1200 px.
-add_executable(EonMiniEEF_UISnapshotMin tools/UiSnapshotMin.cpp)
-target_compile_features(EonMiniEEF_UISnapshotMin PRIVATE cxx_std_20)
-target_compile_definitions(EonMiniEEF_UISnapshotMin PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
-target_include_directories(EonMiniEEF_UISnapshotMin PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
-target_link_libraries(EonMiniEEF_UISnapshotMin PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+# Renders the editor at an arbitrary window size passed on the command line, so
+# any supported size can be checked without adding a target per size.  It exits
+# with 2 when the requested size is below the editor's resize limits, so a
+# clamped render can never be mistaken for a passing one.
+add_executable(EonMiniEEF_UISnapshotAt tools/UiSnapshotAt.cpp)
+target_compile_features(EonMiniEEF_UISnapshotAt PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_UISnapshotAt PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_UISnapshotAt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_UISnapshotAt PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
 target_compile_features(EonMiniEEF_UISnapshot PRIVATE cxx_std_20)
 target_compile_definitions(EonMiniEEF_UISnapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_include_directories(EonMiniEEF_UISnapshot PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)

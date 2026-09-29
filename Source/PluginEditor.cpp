@@ -38,7 +38,13 @@ constexpr int oscillatorStripHeight = 78;
 // legible at the 1200 px minimum editor width.
 constexpr int lowerSectionHeight = 190;
 constexpr int fxMinimumHeight = 152;
+constexpr int fxMaximumHeight = 268;
 constexpr int bottomMargin = 16;
+// The layout constants below add up to a fixed 800 px of height, so this is the
+// real floor.  setResizeLimits declares it to the host and resized() enforces
+// it, because a resize limit is a request and a host may still deliver less.
+constexpr int minimumEditorWidth = 1200;
+constexpr int minimumEditorHeight = 800;
 
 struct HeaderLayout
 {
@@ -135,7 +141,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     // Keep every physical control visible, but never shrink the panel into the
     // former overlapping layout. Hosts can still scale beyond this minimum.
     setResizable (true, true);
-    setResizeLimits (1200, 800, 1600, 1000);
+    setResizeLimits (minimumEditorWidth, minimumEditorHeight, 1600, 1000);
     setSize (1320, 860);
     startTimerHz (30);
 }
@@ -400,8 +406,8 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     // height instead of leaving a band of bare wood in the middle.
     const int lowerBlockBottom = contentTop + oscillatorHeight + moduleGap
                                + lowerSectionHeight + moduleGap;
-    const int fxHeight = juce::jmax (fxMinimumHeight,
-                                     getHeight() - bottomMargin - lowerBlockBottom);
+    const int fxHeight = juce::jlimit (fxMinimumHeight, fxMaximumHeight,
+                                      getHeight() - bottomMargin - lowerBlockBottom);
     const int fxY = getHeight() - bottomMargin - fxHeight;
     const int lowerY = top + topH + gap;
     const int lowerH = lowerSectionHeight;
@@ -417,6 +423,17 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
 }
 void EonMiniEEFEditor::resized()
 {
+    // The fixed block heights below need 800 px; below that they overlap by
+    // construction, so a window the host forced smaller is grown back to the
+    // documented minimum instead of being laid out on top of itself.  A host
+    // that cannot give 800 px gets a tall editor rather than an unusable one.
+    if (getHeight() < minimumEditorHeight || getWidth() < minimumEditorWidth)
+    {
+        setSize (juce::jmax (minimumEditorWidth, getWidth()),
+                 juce::jmax (minimumEditorHeight, getHeight()));
+        return;
+    }
+
     const int w = getWidth(), h = getHeight(), m = contentMargin, gap = moduleGap, top = contentTop, topH = oscillatorHeight;
     const auto headerLayout = makeHeaderLayout (w);
     oversamplingMode.setBounds (headerLayout.qualityX, 27, headerLayout.qualityWidth, 28);
@@ -476,7 +493,8 @@ void EonMiniEEFEditor::resized()
     const int lowerY = top + topH + gap;
     const int lowerH = lowerSectionHeight;
     const int lowerBlockBottom = lowerY + lowerH + gap;
-    const int fxHeight = juce::jmax (fxMinimumHeight, h - bottomMargin - lowerBlockBottom);
+    const int fxHeight = juce::jlimit (fxMinimumHeight, fxMaximumHeight,
+                                      h - bottomMargin - lowerBlockBottom);
     const int fxY = h - bottomMargin - fxHeight;
     const int envW = (w - 2 * m - 2 * gap) * 32 / 100, filterW = (w - 2 * m - 2 * gap) * 30 / 100;
     int x = m + 18;
