@@ -92,6 +92,27 @@ if (Python3_Interpreter_FOUND)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+# Sweeps a sine through the real voice and measures how much of it folds back
+# below Nyquist, per sample rate and per oversampling mode.  This is the
+# measurement DESIGN.md asks for under "음질 계측": it quantifies the PolyBLEP
+# response instead of asserting it.  Not registered with CTest: it prints a
+# table, and the numbers move with every DSP change, so it belongs to a report
+# rather than to a pass/fail gate.
+add_executable(EonMiniEEF_SawSweep tools/SawSweep.cpp)
+target_compile_features(EonMiniEEF_SawSweep PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_SawSweep PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_SawSweep PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_SawSweep PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+
+# Times the real processBlock() under a worst-case voice load.  The older
+# cpu-smoke in run_dsp_sanity.py times a Python re-implementation, which says
+# nothing about the shipping code; this one calls the processor.
+add_executable(EonMiniEEF_CpuProbe tools/CpuProbe.cpp)
+target_compile_features(EonMiniEEF_CpuProbe PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_CpuProbe PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_CpuProbe PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_CpuProbe PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+
 # Offline WAV renderer for ears-on verification without a DAW.  Renders a
 # 4-note chord through the selected factory preset so users can listen to the
 # synth offline.  Run: EonMiniEEF_RenderWav <preset 0-25> <out.wav>
