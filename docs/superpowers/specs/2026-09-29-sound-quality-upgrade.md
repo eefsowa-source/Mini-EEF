@@ -116,4 +116,8 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - P2.2 노이즈 스테레오 비상관 + 유니즌 레벨 drift: 완료
 - P2.3 hard sync / ring-mod: 제외 (보고서 근거 참조)
 - P2: 완료 (reports/2026-09-30-voice-variance-stereo-noise.md)
-- P3 이하: 미착수
+- P3.1 리버 comb 변조: 완료
+- P3.2 델레이 스테레오 폭: 완료
+- P3.3 ampSat/limiter를 오버샘플 경로로 이동: 완료
+- P3: 완료 (reports/2026-09-30-reverb-delay-oversampled-amp.md)
+- P4 이하: 미착수
