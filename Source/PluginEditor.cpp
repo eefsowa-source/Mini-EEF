@@ -8,13 +8,20 @@
 
 namespace
 {
-const juce::Colour bg       (0xff07171c);
-const juce::Colour panel    (0xff183f49);
-const juce::Colour edge     (0xff62bfd0);
-const juce::Colour ivory    (0xffe1faff);
-const juce::Colour mint     (0xff39d4d8);
-const juce::Colour mintGlow (0xff8cf4ff);
-const juce::Colour mintDeep (0xff0b5365);
+// Analogue-synth palette: warm walnut cheeks and a sanded aluminium panel
+// under cream silk-screening, with amber pilot lamps.  The previous teal
+// powder-coat read as digital gear; analogue panels are warmer, lower in
+// saturation, and use a cream/brown axis instead of a cyan one.
+const juce::Colour bg       (0xff241c16);
+const juce::Colour panel    (0xFF4C433A);
+const juce::Colour edge     (0xffb9a882);
+const juce::Colour ivory    (0xffece0c8);
+const juce::Colour mint     (0xffd9a441);
+const juce::Colour mintGlow (0xfff6d78c);
+const juce::Colour mintDeep (0xff6b4a1c);
+const juce::Colour walnut   (0xff3a2a1e);
+const juce::Colour brass    (0xffc9a15c);
+const juce::Colour cream    (0xfff2e7d2);
 constexpr int headerY = 9;
 constexpr int headerHeight = 78;
 constexpr int contentTop = 96;
@@ -195,29 +202,40 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     const auto w = getWidth();
     const auto h = getHeight();
 
-    juce::ColourGradient chassis (juce::Colour (0xff275b68), 0.0f, 0.0f,
-                                  bg, 0.0f, (float) h, false);
+    // Analogue chassis: a walnut-cheeked cabinet with a sanded aluminium
+    // centre panel.  The wood grain runs vertically along the cheeks and the
+    // brushed pass runs horizontally across the panel, the way real cabinets
+    // are finished.
+    juce::ColourGradient chassis (juce::Colour (0xff54402e), 0.0f, 0.0f,
+                                  walnut, 0.0f, (float) h, false);
     g.setGradientFill (chassis);
     g.fillRect (getLocalBounds());
-    // A small, deterministic brushing pass keeps the chassis tactile without
-    // image assets or per-frame random noise.
-    for (int y = 6; y < h; y += 4)
+
+    // Deterministic wood grain: low-frequency bands plus a few darker lines.
+    // No per-frame randomness, so the panel never shimmers while a host renders.
+    for (int y = 3; y < h; y += 7)
     {
-        g.setColour ((y / 4) % 2 == 0 ? juce::Colours::white.withAlpha (0.018f)
-                                      : juce::Colours::black.withAlpha (0.026f));
+        const float band = 0.5f + 0.5f * std::sin ((float) y * 0.085f);
+        g.setColour (juce::Colours::black.withAlpha (0.030f + 0.026f * band));
+        g.fillRect (0, y, w, 3);
+    }
+    for (int line = 0; line < 7; ++line)
+    {
+        const int y = 40 + line * (h / 7);
+        g.setColour (juce::Colours::black.withAlpha (0.055f));
         g.fillRect (0, y, w, 1);
     }
 
     const auto header = juce::Rectangle<float> (12.0f, (float) headerY, (float) w - 24.0f, (float) headerHeight);
     g.setColour (juce::Colours::black.withAlpha (0.58f));
     g.fillRoundedRectangle (header.translated (0.0f, 0.8f), 6.0f);
-    juce::ColourGradient headerMetal (juce::Colour (0xff34707e), header.getCentreX(), header.getY(),
+    juce::ColourGradient headerMetal (juce::Colour (0xff5f4a36), header.getCentreX(), header.getY(),
                                       juce::Colour (0xff0a252d), header.getCentreX(), header.getBottom(), false);
     g.setGradientFill (headerMetal);
     g.fillRoundedRectangle (header, 6.0f);
-    g.setColour (juce::Colour (0xff78c3d0).withAlpha (0.75f));
+    g.setColour (brass.withAlpha (0.70f));
     g.drawRoundedRectangle (header, 6.0f, 1.0f);
-    g.setColour (juce::Colour (0xff090a0b).withAlpha (0.88f));
+    g.setColour (juce::Colour (0xff16110c).withAlpha (0.88f));
     g.drawRoundedRectangle (header.reduced (1.6f), 5.0f, 0.65f);
     juce::ColourGradient topRail (mintGlow, 0.0f, 0.0f,
                                   mintDeep, (float) w, 0.0f, false);
@@ -227,7 +245,7 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     const auto headerLayout = makeHeaderLayout (w);
     auto headerCaption = [&] (const juce::String& text, int x, int width, int y)
     {
-        g.setColour (juce::Colour (0xffd6fff4).withAlpha (0.90f));
+        g.setColour (cream.withAlpha (0.88f));
         g.setFont (EonAnalogLookAndFeel::panelFont (11.0f, true, 0.94f));
         g.drawText (text, x, y, width, 12, juce::Justification::left);
     };
@@ -275,14 +293,27 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
         const auto inner = outer.reduced (2.0f);
         g.setColour (juce::Colours::black.withAlpha (0.62f));
         g.fillRoundedRectangle (outer.translated (0.0f, 3.0f), 8.0f);
-        juce::ColourGradient bezel (juce::Colour (0xff65b4c2), outer.getCentreX(), outer.getY(),
-                                    juce::Colour (0xff071b21), outer.getCentreX(), outer.getBottom(), false);
+        juce::ColourGradient bezel (brass.brighter (0.18f), outer.getCentreX(), outer.getY(),
+                                    juce::Colour (0xff1b1510), outer.getCentreX(), outer.getBottom(), false);
         g.setGradientFill (bezel);
         g.fillRoundedRectangle (outer, 8.0f);
-        juce::ColourGradient module (panel.brighter (0.11f), inner.getCentreX(), inner.getY(),
-                                     panel.darker (0.14f), inner.getCentreX(), inner.getBottom(), false);
+        juce::ColourGradient module (juce::Colour (0xFF7C6F5E), inner.getCentreX(), inner.getY(),
+                                     juce::Colour (0xFF52483C), inner.getCentreX(), inner.getBottom(), false);
         g.setGradientFill (module);
         g.fillRoundedRectangle (inner, 6.2f);
+        // Fine horizontal brushing, clipped to the module: sanded aluminium
+        // panels scatter light along the grain rather than across it.
+        g.saveState();
+        juce::Path moduleClip;
+        moduleClip.addRoundedRectangle (inner, 6.2f);
+        g.reduceClipRegion (moduleClip.getBounds().toNearestInt());
+        for (int brushY = (int) inner.getY(); brushY < inner.getBottom(); brushY += 3)
+        {
+            const float phase = 0.5f + 0.5f * std::sin ((float) brushY * 1.7f);
+            g.setColour (juce::Colours::white.withAlpha (0.012f + 0.012f * phase));
+            g.fillRect ((int) inner.getX(), brushY, (int) inner.getWidth(), 1);
+        }
+        g.restoreState();
         g.setColour (juce::Colours::black.withAlpha (0.70f));
         g.drawRoundedRectangle (inner, 6.2f, 0.7f);
         g.setColour (accent.withAlpha (0.62f));
@@ -292,7 +323,7 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
         g.setColour (accent);
         g.setFont (EonAnalogLookAndFeel::panelFont (14.8f, true, 0.93f));
         g.drawText (title, r.getX() + 13, r.getY() + 11, r.getWidth() - 26, 19, juce::Justification::left);
-        g.setColour (juce::Colour (0xffa6e4ed).withAlpha (0.46f));
+        g.setColour (cream.withAlpha (0.34f));
         g.fillRect (r.getX() + 12, r.getY() + 38, r.getWidth() - 24, 1);
         for (const auto corner : { juce::Point<int> (r.getX() + 9, r.getY() + 9),
                                    juce::Point<int> (r.getRight() - 9, r.getY() + 9),
@@ -301,11 +332,11 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
         {
             g.setColour (juce::Colours::black.withAlpha (0.80f));
             g.fillEllipse ((float) corner.x - 2.4f, (float) corner.y - 1.7f, 4.8f, 4.8f);
-            g.setColour (juce::Colour (0xff5796a2));
+            g.setColour (brass.darker (0.10f));
             g.fillEllipse ((float) corner.x - 2.1f, (float) corner.y - 2.2f, 4.2f, 4.2f);
             g.setColour (bg);
             g.fillEllipse ((float) corner.x - 1.4f, (float) corner.y - 1.5f, 2.8f, 2.8f);
-            g.setColour (juce::Colour (0xffbdf7ff).withAlpha (0.50f));
+            g.setColour (cream.withAlpha (0.46f));
             g.drawLine ((float) corner.x - 0.8f, (float) corner.y - 0.3f,
                         (float) corner.x + 0.8f, (float) corner.y - 0.3f, 0.7f);
         }

@@ -10,9 +10,9 @@ class EonAnalogLookAndFeel final : public juce::LookAndFeel_V4
 public:
     EonAnalogLookAndFeel()
     {
-        setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xffe1faff));
-        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xff07191f));
-        setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xff3b8999));
+        setColour (juce::Slider::textBoxTextColourId, juce::Colour (0xFFECE0C8));
+        setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour (0xFF1B1611));
+        setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xFF8A7550));
     }
 
     static juce::String interfaceFontFamily()
@@ -90,18 +90,18 @@ public:
     {
         const auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
         const float press = down ? 1.0f : 0.0f;
-        const auto face = backgroundColour.interpolatedWith (juce::Colour (0xff225462), 0.24f);
+        const auto face = backgroundColour.interpolatedWith (juce::Colour (0xff2a1f16), 0.24f);
 
         g.setColour (juce::Colour (0x68000000));
         g.fillRoundedRectangle (bounds.translated (0.0f, 1.8f), 4.0f);
 
-        juce::ColourGradient metal (face.brighter (highlighted ? 0.16f : 0.06f),
+        juce::ColourGradient metal (face.brighter (highlighted ? 0.20f : 0.08f),
                                     bounds.getCentreX(), bounds.getY(),
                                     face.darker (down ? 0.10f : 0.32f),
                                     bounds.getCentreX(), bounds.getBottom(), false);
         g.setGradientFill (metal);
         g.fillRoundedRectangle (bounds.translated (0.0f, press), 4.0f);
-        g.setColour (juce::Colour (0xff6dd2df).withAlpha (highlighted ? 0.82f : 0.55f));
+        g.setColour (juce::Colour (0xffd9a441).withAlpha (highlighted ? 0.86f : 0.55f));
         g.drawRoundedRectangle (bounds.translated (0.0f, press), 4.0f, 0.9f);
         g.setColour (juce::Colours::black.withAlpha (0.60f));
         g.drawRoundedRectangle (bounds.reduced (1.3f).translated (0.0f, press), 3.1f, 0.65f);
@@ -112,14 +112,14 @@ public:
                        juce::ComboBox&) override
     {
         const auto bounds = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (1.0f);
-        const auto face = juce::Colour (0xff183f49);
+        const auto face = juce::Colour (0xFF2F2A22);
         g.setColour (juce::Colour (0x5c000000));
         g.fillRoundedRectangle (bounds.translated (0.0f, 1.4f), 3.5f);
         juce::ColourGradient metal (face.brighter (down ? 0.02f : 0.09f), bounds.getCentreX(), bounds.getY(),
                                     face.darker (0.28f), bounds.getCentreX(), bounds.getBottom(), false);
         g.setGradientFill (metal);
         g.fillRoundedRectangle (bounds, 3.5f);
-        g.setColour (juce::Colour (0xff79d0dd).withAlpha (0.78f));
+        g.setColour (juce::Colour (0xFFC9A15C).withAlpha (0.78f));
         g.drawRoundedRectangle (bounds, 3.5f, 0.85f);
         g.setColour (juce::Colour (0xff090a0b).withAlpha (0.85f));
         g.drawRoundedRectangle (bounds.reduced (1.4f), 2.5f, 0.6f);
@@ -132,7 +132,7 @@ public:
         arrow.startNewSubPath (cx - 5.0f, cy - 2.0f);
         arrow.lineTo (cx, cy + 3.0f);
         arrow.lineTo (cx + 5.0f, cy - 2.0f);
-        g.setColour (juce::Colour (0xffedfff9).withAlpha (down ? 1.0f : 0.92f));
+        g.setColour (juce::Colour (0xFFF6E7C6).withAlpha (down ? 1.0f : 0.92f));
         g.strokePath (arrow, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
     }
@@ -156,110 +156,93 @@ public:
 
         const auto outer = juce::Rectangle<float> (centre.x - radius, centre.y - radius, diameter, diameter);
         const auto rim = outer.reduced (2.0f);
-        const auto face = outer.reduced (5.2f);
+        const auto face = outer.reduced (4.6f);
 
-        // Multiple physically distinct layers make the cap feel machined
-        // rather than painted: cast shadow, metal collar, black recess,
-        // knurled sidewall, curved gloss and a recessed indicator groove.
-        g.setColour (juce::Colour (0x2d000000));
-        g.fillEllipse (outer.translated (0.0f, 6.3f));
-        g.setColour (juce::Colour (0x78000000));
-        g.fillEllipse (outer.translated (0.0f, 3.5f));
-        juce::ColourGradient bezel (juce::Colour (0xffa3e3eb), outer.getCentreX(), outer.getY(),
-                                    juce::Colour (0xff07232a), outer.getCentreX(), outer.getBottom(), false);
-        g.setGradientFill (bezel);
+        // Analogue knob anatomy: a moulded cream cap sitting in a dark skirt,
+        // a knurled skirt for grip, and a printed indicator line.  There is no
+        // glowing arc and no hub: real analogue dials read the pointer, not a
+        // light show, and the value arc is drawn as printed ink on the skirt.
+        g.setColour (juce::Colour (0x30000000));
+        g.fillEllipse (outer.translated (0.0f, 4.6f));
+        g.setColour (juce::Colour (0x66000000));
+        g.fillEllipse (outer.translated (0.0f, 2.4f));
+        // Dark skirt, the moulded plastic the cap is pressed into.
+        juce::ColourGradient skirt (juce::Colour (0xff2b2723), outer.getCentreX(), outer.getY(),
+                                    juce::Colour (0xff100e0c), outer.getCentreX(), outer.getBottom(), false);
+        g.setGradientFill (skirt);
         g.fillEllipse (outer);
-        g.setColour (juce::Colour (0xff02110f));
-        g.fillEllipse (rim);
-        juce::ColourGradient cap (juce::Colour (0xff4d929f), face.getCentreX(), face.getY(),
-                                  juce::Colour (0xff0a252d), face.getCentreX(), face.getBottom(), false);
-        g.setGradientFill (cap);
-        g.fillEllipse (face);
-        const auto capInset = face.reduced (2.0f);
-        juce::ColourGradient capCore (juce::Colour (0xff2d6875), capInset.getCentreX(), capInset.getY(),
-                                      juce::Colour (0xff0a1d24), capInset.getCentreX(), capInset.getBottom(), false);
-        g.setGradientFill (capCore);
-        g.fillEllipse (capInset);
-        g.setColour (juce::Colour (0xffc5fff0).withAlpha (0.42f));
-        g.drawEllipse (outer.reduced (0.8f), 1.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.82f));
-        g.drawEllipse (outer.reduced (2.1f), 1.25f);
-        g.setColour (juce::Colour (0xffc8fff1).withAlpha (0.16f));
-        g.drawEllipse (capInset.reduced (0.7f), 0.75f);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawEllipse (rim, 1.0f);
 
-        if (radius >= 22.0f)
+        // Knurling on the skirt: fine ridges, low contrast, purely tactile.
+        if (radius >= 20.0f)
         {
-            const int ridges = juce::jlimit (18, 38, (int) std::round (radius * 1.35f));
+            const int ridges = juce::jlimit (24, 44, (int) std::round (radius * 1.6f));
             for (int ridge = 0; ridge < ridges; ++ridge)
             {
                 const float angle = juce::MathConstants<float>::twoPi * (float) ridge / (float) ridges;
-                const auto a = pointOnRing (angle, radius - 3.5f);
-                const auto b = pointOnRing (angle, radius - 0.6f);
-                g.setColour (juce::Colours::black.withAlpha (0.62f));
-                g.drawLine (a.x + 0.45f, a.y + 0.9f, b.x + 0.45f, b.y + 0.9f, 1.15f);
-                g.setColour (ridge % 2 == 0 ? juce::Colour (0xffc3fff0).withAlpha (0.22f)
-                                             : juce::Colour (0xff287166).withAlpha (0.38f));
-                g.drawLine (a.x, a.y, b.x, b.y, 0.72f);
+                const auto a = pointOnRing (angle, radius - 3.0f);
+                const auto b = pointOnRing (angle, radius - 0.4f);
+                g.setColour (juce::Colours::black.withAlpha (0.34f));
+                g.drawLine (a.x, a.y + 0.5f, b.x, b.y + 0.5f, 0.6f);
+                g.setColour (juce::Colour (0xffe6d8bd).withAlpha (0.07f));
+                g.drawLine (a.x, a.y, b.x, b.y, 0.5f);
             }
         }
 
-        juce::Path gloss;
-        gloss.addCentredArc (cx, cy, radius * 0.72f, radius * 0.72f, 0.0f, -2.52f, -0.58f, true);
-        g.setColour (juce::Colour (0xffe2fff6).withAlpha (0.34f));
-        g.strokePath (gloss, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
+        // The cream cap: warm, slightly domed, matte rather than glossy.
+        juce::ColourGradient cap (juce::Colour (0xfff4ead6), face.getCentreX(), face.getY(),
+                                  juce::Colour (0xffcdbfa4), face.getCentreX(), face.getBottom(), false);
+        g.setGradientFill (cap);
+        g.fillEllipse (face);
+        const auto capInset = face.reduced (1.6f);
+        juce::ColourGradient capCore (juce::Colour (0xffece0c8), capInset.getCentreX(), capInset.getY(),
+                                      juce::Colour (0xffd2c4a9), capInset.getCentreX(), capInset.getBottom(), false);
+        g.setGradientFill (capCore);
+        g.fillEllipse (capInset);
+        g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.42f));
+        g.drawEllipse (capInset, 0.7f);
+        // Faint moulding seam: the hairline a two-part plastic knob leaves.
+        g.setColour (juce::Colour (0xff8d7a58).withAlpha (0.18f));
+        g.drawEllipse (face.reduced (0.7f), 0.6f);
 
+        // Printed scale marks on the panel around the cap.
         for (int tick = 0; tick <= 10; ++tick)
         {
             const float t = static_cast<float> (tick) / 10.0f;
             const float angle = rotaryStartAngle + t * (rotaryEndAngle - rotaryStartAngle);
             const bool major = tick % 2 == 0;
-            const auto tickOuter = pointOnRing (angle, radius + 2.8f);
-            const auto tickInner = pointOnRing (angle, radius + (major ? -1.4f : 0.4f));
-            g.setColour (juce::Colour (0xffbfffee).withAlpha (major ? 0.74f : 0.42f));
-            g.drawLine (tickOuter.x, tickOuter.y, tickInner.x, tickInner.y, major ? 1.1f : 0.7f);
+            const auto tickOuter = pointOnRing (angle, radius + 3.0f);
+            const auto tickInner = pointOnRing (angle, radius + (major ? -0.8f : 1.0f));
+            g.setColour (juce::Colour (0xffe8d9b8).withAlpha (major ? 0.62f : 0.34f));
+            g.drawLine (tickOuter.x, tickOuter.y, tickInner.x, tickInner.y, major ? 1.0f : 0.65f);
         }
 
         const float valueAngle = rotaryStartAngle
                                + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
+        // The value arc is printed ink on the skirt, not an emissive ring.
         juce::Path arc;
-        arc.addCentredArc (cx, cy, radius + 1.0f, radius + 1.0f,
+        arc.addCentredArc (cx, cy, radius + 1.2f, radius + 1.2f,
                            0.0f, rotaryStartAngle, valueAngle, true);
-        g.setColour (juce::Colour (0xff35e1e5));
-        g.strokePath (arc, juce::PathStrokeType (1.9f, juce::PathStrokeType::curved,
+        g.setColour (juce::Colour (0xfff0d9a8).withAlpha (0.50f));
+        g.strokePath (arc, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
                                                   juce::PathStrokeType::rounded));
 
-        const float pointerLength = radius * 0.66f;
+        // Pointer: a single black line printed into the cap, the way an
+        // analogue dial is actually read.
+        const float pointerLength = radius * 0.80f;
         const auto pointer = pointOnRing (valueAngle, pointerLength);
-        g.setColour (juce::Colours::black.withAlpha (0.84f));
-        g.drawLine (centre.x + 1.0f, centre.y + 1.6f, pointer.x + 1.0f, pointer.y + 1.6f, 4.4f);
-        g.setColour (juce::Colour (0xff175b6b));
-        g.drawLine (centre.x, centre.y + 0.5f, pointer.x, pointer.y + 0.5f, 3.15f);
-        g.setColour (juce::Colour (0xffedfff9));
-        g.drawLine (centre.x - 0.3f, centre.y - 0.3f, pointer.x - 0.3f, pointer.y - 0.3f, 1.55f);
-
-        const float hubDiameter = juce::jlimit (7.0f, 15.0f, radius * 0.27f);
-        const auto hub = juce::Rectangle<float> (centre.x - hubDiameter * 0.5f, centre.y - hubDiameter * 0.5f,
-                                                  hubDiameter, hubDiameter);
-        g.setColour (juce::Colours::black.withAlpha (0.70f));
-        g.fillEllipse (hub.translated (0.0f, 1.0f));
-        juce::ColourGradient hubGradient (juce::Colour (0xff98e1e9), hub.getCentreX(), hub.getY(),
-                                          juce::Colour (0xff0a232a), hub.getCentreX(), hub.getBottom(), false);
-        g.setGradientFill (hubGradient);
-        g.fillEllipse (hub);
-        g.setColour (juce::Colour (0xffd8fff5).withAlpha (0.52f));
-        g.drawEllipse (hub.reduced (0.55f), 0.65f);
-        g.setColour (juce::Colours::black.withAlpha (0.36f));
-        g.fillEllipse (hub.reduced (hubDiameter * 0.31f));
-        g.setColour (juce::Colour (0xffd8fff5).withAlpha (0.32f));
-        g.fillEllipse (hub.reduced (hubDiameter * 0.39f).translated (-0.45f, -0.45f));
+        g.setColour (juce::Colours::black.withAlpha (0.30f));
+        g.drawLine (centre.x, centre.y + 0.6f, pointer.x, pointer.y + 0.6f, 3.4f);
+        g.setColour (juce::Colour (0xff241d16));
+        g.drawLine (centre.x, centre.y, pointer.x, pointer.y, 2.2f);
 
         const auto caption = juce::Rectangle<int> (x + 1, y + height - 17, width - 2, 16);
         const bool isAdjusting = slider.getProperties().getWithDefault ("eon.dragging", false);
         const auto text = isAdjusting ? slider.getTextFromValue (slider.getValue()).toUpperCase()
                                       : slider.getName();
         g.setFont (isAdjusting ? readoutFont (12.3f) : panelFont (12.0f, true, 0.93f));
-        g.setColour (isAdjusting ? juce::Colour (0xffa6f7ff) : juce::Colour (0xffeffcff).withAlpha (0.96f));
+        g.setColour (isAdjusting ? juce::Colour (0xfff6d78c) : juce::Colour (0xffece0c8).withAlpha (0.94f));
         g.drawFittedText (text, caption, juce::Justification::centred, 1, 0.90f);
     }
 };
