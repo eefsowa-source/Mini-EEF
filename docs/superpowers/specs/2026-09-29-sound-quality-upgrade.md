@@ -124,6 +124,10 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 - `Presets/*.eonpreset` 재생성. 이전 파일은 10개 파라미터(filter env, voice
   variance, env curve, delayStereo, reverbModulation, filterDrive)가 추가된 뒤 한 번도
   갱신되지 않았다. 기존 26종의 값은 변경 없고 새 파라미터만 추가된다.
+- 파형별 배음 기준선确立 (reports/2026-09-30-wave-harmonics.md). saw/square/
+  triangle/sine 을 단독 렌더해 H1..H12 를 측정했고, 세 파형 모두 이론치에 0.1 dB
+  이내로 일치했다. 50% square 의 짝수 배음은 -124.6 dB 로 이미 0이므로, "PolyBLEP 가
+  짝수 배음을 손상시킨다"는 가설은 기각하고 DSP 변경을 하지 않았다.
 - P3.1 리버 comb 변조: 완료
 - P3.2 델레이 스테레오 폭: 완료
 - P3.3 ampSat/limiter를 오버샘플 경로로 이동: 완료

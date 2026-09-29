@@ -129,3 +129,19 @@ target_compile_features(EonMiniEEF_ThdProbe PRIVATE cxx_std_20)
 target_compile_definitions(EonMiniEEF_ThdProbe PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_include_directories(EonMiniEEF_ThdProbe PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
 target_link_libraries(EonMiniEEF_ThdProbe PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+
+# Per-waveform harmonic baseline.  Unlike ThdProbe, which drives a sine to
+# isolate the saturation stage, this one renders each oscillator shape on its
+# own so the saw / square / triangle spectra have a recorded reference.  The
+# gates only assert that the measurement is sound and reproducible; the
+# numbers are the baseline that later waveform work is compared against.
+add_executable(EonMiniEEF_WaveHarmonics tools/WaveHarmonics.cpp)
+target_compile_features(EonMiniEEF_WaveHarmonics PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_WaveHarmonics PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_WaveHarmonics PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_WaveHarmonics PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+
+add_test(NAME wave_harmonic_baseline
+    COMMAND $<TARGET_FILE:EonMiniEEF_WaveHarmonics>)
+set_tests_properties(wave_harmonic_baseline PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
