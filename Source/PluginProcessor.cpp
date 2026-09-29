@@ -803,6 +803,11 @@ public:
                 float oscillatorLeft = 0.0f, oscillatorRight = 0.0f;
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
+                    // A muted oscillator contributed only a zero sample, so the
+                    // mix can skip its pan lookup and Nyquist fade entirely.
+                    if (oscillatorLevel[oscillator] <= 1.0e-6f
+                        && !(oscillator == 0 && std::abs (osc1FmAmount) > 1.0e-6f))
+                        continue;
                     // Reuse the cached equal-power gains unless this
                     // oscillator's pan actually moved since the last sample.
                     if (! panCacheValid[oscillator]
@@ -1547,19 +1552,26 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
     // changes without calling host-notification APIs on the audio thread.
     const int compensation = juce::jlimit (0, latencyBufferCapacity - 1,
         fixedLatencySamples - activeOversamplingLatency);
+    const int latencyChannels = juce::jmin (2, buffer.getNumChannels());
+    // The write always happens: a host can switch to 2x or 4x mid-stream, and
+    // the compensation read needs the samples that were written while 1x was
+    // active.  Only the read is skipped when there is nothing to compensate.
+    const bool needsRead = compensation != 0;
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
-        const int readPosition = (latencyWritePosition - compensation
-                                  + latencyBufferCapacity) % latencyBufferCapacity;
-        for (int channel = 0; channel < juce::jmin (2, buffer.getNumChannels()); ++channel)
+        int readPosition = latencyWritePosition - compensation;
+        if (readPosition < 0)
+            readPosition += latencyBufferCapacity;
+        for (int channel = 0; channel < latencyChannels; ++channel)
         {
             auto& line = latencyBuffer[static_cast<size_t> (channel)];
             const float input = buffer.getSample (channel, sample);
             line[static_cast<size_t> (latencyWritePosition)] = input;
-            buffer.setSample (channel, sample,
-                              compensation == 0 ? input : line[static_cast<size_t> (readPosition)]);
+            if (needsRead)
+                buffer.setSample (channel, sample, line[static_cast<size_t> (readPosition)]);
         }
-        latencyWritePosition = (latencyWritePosition + 1) % latencyBufferCapacity;
+        latencyWritePosition = latencyWritePosition + 1 == latencyBufferCapacity
+            ? 0 : latencyWritePosition + 1;
     }
 }
 
