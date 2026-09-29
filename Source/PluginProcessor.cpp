@@ -1287,10 +1287,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::fxWet, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::delayTime, 0.01f, 2.0f, 0.35f);
     addFloat (ParamIDs::delayFeedback, 0.0f, 0.9f, 0.25f);
+    addFloat (ParamIDs::delayStereo, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::chorusDepth, 0.0f, 0.02f, 0.004f);
     addFloat (ParamIDs::chorusRate, 0.05f, 8.0f, 0.25f);
     addFloat (ParamIDs::chorusMix, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::reverbMix, 0.0f, 1.0f, 0.0f);
+    addFloat (ParamIDs::reverbModulation, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParamIDs::oversampling, "Oversampling",
         juce::StringArray { "1x Eco", "2x Quality", "4x High" }, 0));
@@ -1356,6 +1358,30 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
                     const float shaped = applyDriveCurve (input, gain, curveMode);
                     samples[sample] = std::isfinite (shaped) ? shaped : 0.0f;
                 }
+            }
+        }
+
+        // Roadmap P3.3: the amp stage and the safety limiter run here, above
+        // the host rate, whenever a quality mode is selected.  The host-rate
+        // loop in processBlock skips both so the same signal is shaped exactly
+        // once.  1x mode never reaches this block, keeping the legacy order.
+        const auto* ampSatParameter = apvts.getRawParameterValue (ParamIDs::ampSat);
+        const float ampSatAmount = ampSatParameter != nullptr
+            ? juce::jlimit (0.0f, 1.0f, ampSatParameter->load()) : 0.0f;
+        for (size_t channel = 0; channel < highRateBlock.getNumChannels(); ++channel)
+        {
+            auto* samples = highRateBlock.getChannelPointer (channel);
+            for (size_t sample = 0; sample < highRateBlock.getNumSamples(); ++sample)
+            {
+                const float saturated = applyAmpSaturation (samples[sample], ampSatAmount);
+                // Same bounded knee as the 1x path, evaluated per high-rate
+                // sample so the fold products stay inside the band the
+                // oversampler's stopband filter can still remove.
+                const float magnitude = std::abs (saturated);
+                const float limited = magnitude <= 1.0f
+                    ? saturated
+                    : std::copysign (1.0f + std::tanh (magnitude - 1.0f), saturated);
+                samples[sample] = std::isfinite (limited) ? limited : 0.0f;
             }
         }
 
@@ -1471,9 +1497,11 @@ void EonMiniEEFProcessor::resetReverbState() noexcept
     reverbAllpassPositionsR.fill (0);
     reverbCombDampL.fill (0.0f);
     reverbCombDampR.fill (0.0f);
+    reverbModulation = 0.0f;
+    reverbModulationPhase = 0.0;
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1525,6 +1553,9 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     chorusDepthSmooth.setTargetValue (depthTarget);
     chorusRateSmooth.setTargetValue (rateTarget);
     chorusMixSmooth.setTargetValue (chorusTarget);
+    reverbModulationSmooth.setTargetValue (value (ParamIDs::reverbModulation, 0.0f));
+    delayStereoWidth = juce::jlimit (0.0f, 1.0f,
+        value (ParamIDs::delayStereo, 0.0f));
     const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
@@ -1537,6 +1568,39 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         const float delayedL = fxDelay.getSample (0, delayReadPosition);
         const float delayedR = fxDelay.getSample (1, delayReadPosition);
 
+        // Roadmap P3.2: stereo width as a true ping-pong.  Cross-feeding alone
+        // cannot open the image, because a mono input feeds both channels the
+        // same sample and any equal-weight mix of them stays correlated.  The
+        // width control therefore makes the two taps read different delay
+        // lengths, so consecutive repeats land on alternating sides.  At 0 the
+        // offset is exactly zero and the established single-path send is
+        // untouched.
+        float wetDelayL = delayedL, wetDelayR = delayedR;
+        float writeL = dryL, writeR = dryR;
+        if (delayStereoWidth > 1.0e-5f)
+        {
+            // The spread is a fixed time offset rather than a fraction of the
+            // delay time: scaling with delay length made the two taps land on
+            // an exact number of periods of a low note, which re-correlates
+            // the image instead of opening it.  30 ms is wide enough to read
+            // as a stereo spread and short enough to stay a single echo.
+            constexpr float maxStereoSpreadSeconds = 0.030f;
+            const int offsetSamples = juce::jmax (1,
+                juce::roundToInt (delayStereoWidth * maxStereoSpreadSeconds
+                                  * (float) sampleRate));
+            const int rightReadPosition = (delayReadPosition - offsetSamples
+                                          + fxDelay.getNumSamples()) % fxDelay.getNumSamples();
+            const float delayedROffset = fxDelay.getSample (1, rightReadPosition);
+            // The right channel reads the offset tap on its own, so even a
+            // mono source (which writes the same sample into both lines) is
+            // delayed by two different amounts and the two sides carry
+            // different parts of the waveform.  Blending both taps into both
+            // channels instead would keep them perfectly correlated.
+            wetDelayL = delayedL * (1.0f - juce::jlimit (0.0f, 1.0f, delayStereoWidth))
+                      + delayedROffset * juce::jlimit (0.0f, 1.0f, delayStereoWidth);
+            wetDelayR = delayedROffset;
+        }
+
         // A mild one-pole loss in the feedback loop keeps repeated echoes
         // from retaining unlimited top-end energy.  The normalized tanh
         // stage is deliberately small and only acts on the feedback copy.
@@ -1546,8 +1610,8 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         const float feedbackDrive = 1.0f + 0.35f * feedback;
         const float feedbackL = std::tanh (delayDampL * feedbackDrive) / feedbackDrive;
         const float feedbackR = std::tanh (delayDampR * feedbackDrive) / feedbackDrive;
-        fxDelay.setSample (0, fxWritePosition, dryL + feedbackL * feedback);
-        fxDelay.setSample (1, fxWritePosition, dryR + feedbackR * feedback);
+        fxDelay.setSample (0, fxWritePosition, writeL + feedbackL * feedback);
+        fxDelay.setSample (1, fxWritePosition, writeR + feedbackR * feedback);
 
         // Four short damped combs provide the decay field; two allpass stages
         // diffuse the summed field before it reaches the wet mix.  Delay
@@ -1555,6 +1619,15 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         // sample rates without allocating in this loop.
         constexpr float combFeedback = 0.78f;
         constexpr float combDamping = 0.25f;
+        // Roadmap P3.1: a sub-audio oscillator drifts each comb line's
+        // damping, so the four static delays no longer ring at one fixed
+        // period.  The rate is deliberately slow (0.07-0.5 Hz, incommensurate
+        // across the four lines) to smear the tail rather than add an audible
+        // tremolo.  At modulation 0 the coefficient is untouched and the
+        // comb network stays bit-identical to the established tail.
+        const float reverbModulationAmount = reverbModulationSmooth.getNextValue();
+        const float reverbLfo = std::sin (juce::MathConstants<float>::twoPi
+                                          * (float) reverbModulationPhase);
         const float reverbInputL = 0.78f * dryL + 0.22f * dryR;
         const float reverbInputR = 0.78f * dryR + 0.22f * dryL;
         float combSumL = 0.0f, combSumR = 0.0f;
@@ -1564,8 +1637,16 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             const int position = reverbCombPositions[index];
             const float combOutL = reverbCombL[index][static_cast<size_t> (position)];
             const float combOutR = reverbCombR[index][static_cast<size_t> (position)];
-            reverbCombDampL[index] += combDamping * (combOutL - reverbCombDampL[index]);
-            reverbCombDampR[index] += combDamping * (combOutR - reverbCombDampR[index]);
+            // Each line runs its own phase, a fixed irrational multiple apart,
+            // so the four modulated dampings never realign into a periodic
+            // pattern the ear can lock onto.
+            const float linePhase = reverbLfo * (1.0f + 0.37f * (float) line);
+            const float lineDamping = reverbModulationAmount > 1.0e-5f
+                ? juce::jlimit (0.05f, 0.60f, combDamping * (1.0f + 1.2f
+                                                            * reverbModulationAmount * linePhase))
+                : combDamping;
+            reverbCombDampL[index] += lineDamping * (combOutL - reverbCombDampL[index]);
+            reverbCombDampR[index] += lineDamping * (combOutR - reverbCombDampR[index]);
             reverbCombL[index][static_cast<size_t> (position)]
                 = reverbInputL + reverbCombDampL[index] * combFeedback;
             reverbCombR[index][static_cast<size_t> (position)]
@@ -1574,6 +1655,9 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             combSumL += combOutL * 0.25f;
             combSumR += combOutR * 0.25f;
         }
+        reverbModulationPhase += reverbModulationIncrement;
+        if (reverbModulationPhase >= 1.0)
+            reverbModulationPhase -= 1.0;
         float rvL = processReverbAllpass (combSumL, reverbAllpassL[0],
             reverbAllpassPositionsL[0], reverbAllpassLengths[0]);
         rvL = processReverbAllpass (rvL, reverbAllpassL[1],
@@ -1627,7 +1711,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
                 + juce::MathConstants<double>::twoPi * (double) rate / sampleRate,
                 juce::MathConstants<double>::twoPi);
         }
-        float fxL=dryL+wet*delayedL+chorus*chorusWetL+reverb*(rvL-dryL),fxR=dryR+wet*delayedR+chorus*chorusWetR+reverb*(rvR-dryR);
+        float fxL=dryL+wet*wetDelayL+chorus*chorusWetL+reverb*(rvL-dryL),fxR=dryR+wet*wetDelayR+chorus*chorusWetR+reverb*(rvR-dryR);
         // Final safety stage: remove subsonic DC while retaining state across blocks,
         // then apply a bounded soft limiter.  Non-finite values are muted before
         // entering the stateful stages so one bad sample cannot poison the stream.
@@ -1641,14 +1725,23 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             dcInput[static_cast<size_t>(channel)] = sample;
             dcOutput[static_cast<size_t>(channel)] = std::isfinite(blocked) ? blocked : 0.0f;
             const float dcBlocked = dcOutput[static_cast<size_t>(channel)];
-            const float saturated = applyAmpSaturation (dcBlocked, ampSatAmount);
-            // Preserve exact small-signal dynamics.  Only excursions above the
-            // safety ceiling enter a smooth, bounded limiting knee.
-            const float magnitude = std::abs (saturated);
-            const float limited = magnitude <= 1.0f
-                ? saturated
-                : std::copysign (1.0f + std::tanh (magnitude - 1.0f), saturated);
-            const float output = std::isfinite(limited) ? limited : 0.0f;
+            // Roadmap P3.3: when a quality mode owns the oversampled stage, the
+            // amp saturation and the soft limiter move inside it so their fold
+            // products land above the host rate instead of being decimated
+            // straight back to it.  The 1x path keeps the established order
+            // (saturation, then limiter) unchanged.
+            float output = dcBlocked;
+            if (oversamplingBypassed())
+            {
+                const float saturated = applyAmpSaturation (dcBlocked, ampSatAmount);
+                // Preserve exact small-signal dynamics.  Only excursions above
+                // the safety ceiling enter a smooth, bounded limiting knee.
+                const float magnitude = std::abs (saturated);
+                output = magnitude <= 1.0f
+                    ? saturated
+                    : std::copysign (1.0f + std::tanh (magnitude - 1.0f), saturated);
+            }
+            output = std::isfinite(output) ? output : 0.0f;
             b.setSample(channel, i, output);
             if (channel == 0) blockPeakL = juce::jmax (blockPeakL, std::abs (output));
             else blockPeakR = juce::jmax (blockPeakR, std::abs (output));

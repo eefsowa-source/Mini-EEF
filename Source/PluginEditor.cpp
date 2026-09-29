@@ -118,7 +118,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); unisonDriftAttachment=bind(unisonDrift,ParamIDs::unisonDrift,"DRIFT"); voiceVarianceAttachment=bind(voiceVariance,ParamIDs::voiceVariance,"VOICE VAR"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); envCurveAttachment=bind(envCurve,ParamIDs::envCurve,"ENV CRV"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF"); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESO"); filterDriveAttachment=bind(filterDrive,ParamIDs::filterDrive,"FLT DRV"); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT"); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE"); ampSatAttachment=bind(ampSaturation,ParamIDs::ampSat,"SAT");
     lfoRateAttachment=bind(lfoRate,ParamIDs::lfoRate,"LFO RATE"); lfoDepthAttachment=bind(lfoDepth,ParamIDs::lfoDepth,"LFO CUTOFF"); lfoPitchAttachment=bind(lfoPitch,ParamIDs::lfoPitch,"LFO PITCH"); velocityAttachment=bind(velocityAmount,ParamIDs::velocityAmount,"VELOCITY");
     filterAttackAttachment=bind(filterAttack,ParamIDs::filterAttack,"F ATK"); filterDecayAttachment=bind(filterDecay,ParamIDs::filterDecay,"F DEC"); filterSustainAttachment=bind(filterSustain,ParamIDs::filterSustain,"F SUS"); filterReleaseAttachment=bind(filterRelease,ParamIDs::filterRelease,"F REL"); filterEnvAmountAttachment=bind(filterEnvAmount,ParamIDs::filterEnvAmount,"F AMT");
-    fxWetAttachment=bind(fxWet,ParamIDs::fxWet,"FX WET"); delayTimeAttachment=bind(delayTime,ParamIDs::delayTime,"DLY TIME"); delayFeedbackAttachment=bind(delayFeedback,ParamIDs::delayFeedback,"DLY FDBK"); chorusDepthAttachment=bind(chorusDepth,ParamIDs::chorusDepth,"CHO DEPTH"); chorusRateAttachment=bind(chorusRate,ParamIDs::chorusRate,"CHO RATE"); chorusMixAttachment=bind(chorusMix,ParamIDs::chorusMix,"CHO MIX"); reverbMixAttachment=bind(reverbMix,ParamIDs::reverbMix,"REVERB");
+    fxWetAttachment=bind(fxWet,ParamIDs::fxWet,"FX WET"); delayTimeAttachment=bind(delayTime,ParamIDs::delayTime,"DLY TIME"); delayFeedbackAttachment=bind(delayFeedback,ParamIDs::delayFeedback,"DLY FDBK"); delayStereoAttachment=bind(delayStereo,ParamIDs::delayStereo,"DLY WIDE"); chorusDepthAttachment=bind(chorusDepth,ParamIDs::chorusDepth,"CHO DEPTH"); chorusRateAttachment=bind(chorusRate,ParamIDs::chorusRate,"CHO RATE"); chorusMixAttachment=bind(chorusMix,ParamIDs::chorusMix,"CHO MIX"); reverbMixAttachment=bind(reverbMix,ParamIDs::reverbMix,"REVERB"); reverbModulationAttachment=bind(reverbModulation,ParamIDs::reverbModulation,"RVB MOD");
     // Keep every physical control visible, but never shrink the panel into the
     // former overlapping layout. Hosts can still scale beyond this minimum.
     setResizable (true, true);
@@ -425,6 +425,13 @@ void EonMiniEEFEditor::resized()
     // of the caption.  At the panel's left corner it covered the caption text
     // and made the title unreadable.
     lfoShapeMode.setBounds (modX + modW - 78, lowerY + 8, 78, 24);
-    const int fxW = (w - 2 * m - 60) / 7; x = m + 12;
-    for (auto* s : { &fxWet, &delayTime, &delayFeedback, &chorusDepth, &chorusRate, &chorusMix, &reverbMix }) { s->setBounds (x, fxY + 30, fxW, 74); x += fxW + 6; }
+    // Nine knobs share the FX strip: the two P3 controls (delay width and
+    // reverb modulation) join the established seven.  Leaving the loop at
+    // seven rendered the two bound but invisible, the same failure the
+    // oscillator strip had before its width was corrected.
+    const int fxW = (w - 2 * m - 60) / 9; x = m + 12;
+    for (auto* s : { &fxWet, &delayTime, &delayFeedback, &delayStereo,
+                      &chorusDepth, &chorusRate, &chorusMix,
+                      &reverbMix, &reverbModulation })
+    { s->setBounds (x, fxY + 30, fxW, 74); x += fxW + 6; }
 }

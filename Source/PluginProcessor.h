@@ -71,6 +71,16 @@ private:
     std::array<int, reverbAllpassCount> reverbAllpassLengths {};
     std::array<int, reverbAllpassCount> reverbAllpassPositionsL {}, reverbAllpassPositionsR {};
     std::array<float, reverbCombCount> reverbCombDampL {}, reverbCombDampR {};
+    // Roadmap P3.1: slow modulation of the comb feedback path.  Static comb
+    // lengths give a metallic, ringing tail; a sub-audio LFO drifting each
+    // line's damping coefficient breaks that periodicity.  The parameter is
+    // stored on the processor and read once per block, so the audio thread
+    // never touches the parameter tree inside the sample loop.
+    float reverbModulation = 0.0f;
+    float delayStereoWidth = 0.0f;
+    juce::SmoothedValue<float> reverbModulationSmooth;
+    double reverbModulationPhase = 0.0;
+    double reverbModulationIncrement = 0.0;
     // Per-channel state for the final DC blocker.  Kept on the processor so
     // state survives block boundaries without any real-time allocation.
     std::array<float, 2> dcInput {}, dcOutput {};

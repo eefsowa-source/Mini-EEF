@@ -88,10 +88,17 @@ inline constexpr auto compRatio = "compRatio";
 inline constexpr auto fxWet = "fxWet";
 inline constexpr auto delayTime = "delayTime";
 inline constexpr auto delayFeedback = "delayFeedback";
+// Stereo width of the delay.  0 keeps the established single-path send (the
+// left channel feeds both taps), while higher values ping-pong the taps and
+// spread the repeats across the stereo field.
+inline constexpr auto delayStereo = "delayStereo";
 inline constexpr auto chorusDepth = "chorusDepth";
 inline constexpr auto chorusRate = "chorusRate";
 inline constexpr auto chorusMix = "chorusMix";
 inline constexpr auto reverbMix = "reverbMix";
+// Slow modulation of the reverb comb feedback.  Zero keeps the established
+// static comb texture, so existing presets keep their measured tail.
+inline constexpr auto reverbModulation = "reverbModulation";
 // Global non-linear output quality.  1x is the compatibility/default mode;
 // higher modes oversample the final saturation stage before downsampling.
 inline constexpr auto oversampling = "oversampling";
