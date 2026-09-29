@@ -15,6 +15,17 @@ public:
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colour (0xFF8A7550));
     }
 
+    // Dial sizing is declared, not inferred.  The layout and the renderer both
+    // read these three diameters, so a row can be resized without silently
+    // changing how big its knobs look.  See
+    // docs/superpowers/specs/2026-09-30-dial-grade-adr.md for the reasoning.
+    enum DialGrade { compact = 0, standard = 1, primary = 2 };
+
+    static constexpr float dialDiameter (int grade) noexcept
+    {
+        return grade == compact ? 40.0f : grade == primary ? 62.0f : 50.0f;
+    }
+
     static juce::String interfaceFontFamily()
     {
 #if JUCE_MAC
@@ -147,11 +158,15 @@ public:
         // pointer reads as a control, while an oversized one reads as a gauge.
         // The 0.84 factor and the 72 px ceiling keep the whole set in that
         // range while preserving the ratio between the large and small dials.
-        constexpr float dialScale = 0.84f;
-        constexpr float maxDiameter = 72.0f;
-        const float diameter = juce::jmax (16.0f,
-            juce::jmin (juce::jmin ((float) width - 4.0f, dialHeight) * dialScale,
-                        maxDiameter));
+        // The diameter comes from the slider's declared grade, not from its
+        // bounds, so a row keeps the same knob size when the window resizes.
+        // Bounds still have to be large enough to hold it; resized() sizes the
+        // rows from the same constant.
+        const int grade = slider.getProperties().getWithDefault ("eon.dialGrade",
+                                                                (int) standard);
+        const float declared = dialDiameter (grade);
+        const float diameter = juce::jmax (14.0f, juce::jmin (declared,
+            juce::jmin ((float) width - 2.0f, dialHeight)));
         const float cx = static_cast<float> (x) + static_cast<float> (width) * 0.5f;
         const float cy = static_cast<float> (y) + dialHeight * 0.5f + 1.5f;
         const float radius = diameter * 0.5f;
@@ -317,7 +332,7 @@ public:
 private:
     EonAnalogLookAndFeel analogLookAndFeel;
     bool windowSharingConfigured = false;
-    void knob(juce::Slider&, const juce::String&);
+    void knob(juce::Slider&, const juce::String&, EonAnalogLookAndFeel::DialGrade = EonAnalogLookAndFeel::standard);
     void applyPreset (int index);
     void savePreset();
     void loadPreset();
