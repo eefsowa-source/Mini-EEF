@@ -11,7 +11,8 @@
 - 16 voice polyphonic, sample-offset 정확한 Note On/Off renderer
 - Oscillator 4개: Saw, Square, Triangle, Sine (OSC3/4는 독립 mix로 활성화)
 - Saw/Square PolyBLEP 대역 제한
-- per-voice phase, ADSR, 최대 8-voice unison, detune/stereo spread/phase
+- per-voice phase, ADSR + 지수 곡선 옵션(envCurve, 기본 0=레거시 선형과 비트 동일),
+  최대 8-voice unison, detune/stereo spread/phase
 - LFO, velocity 및 4-slot modulation matrix
 - Pitch/Cutoff/Amp/Osc2 FM 목적지와 bounded phase-FM
 - LFO free-run/host tempo-sync, cutoff key tracking, 독립 Noise와 LFO AM

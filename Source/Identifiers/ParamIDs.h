@@ -49,6 +49,10 @@ inline constexpr auto attack = "attack";
 inline constexpr auto decay = "decay";
 inline constexpr auto sustain = "sustain";
 inline constexpr auto release = "release";
+// Exponential (RC-style) shaping of the amp envelope.  0 keeps the legacy
+// linear juce::ADSR response bit-identical; higher values bend attack, decay
+// and release toward the analog-style curves without changing their timings.
+inline constexpr auto envCurve = "envCurve";
 inline constexpr auto gain = "gain";
 inline constexpr auto drive = "drive";
 // Roadmap step B: selectable drive curve and gentle amp-stage saturation.

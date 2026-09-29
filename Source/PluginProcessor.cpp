@@ -303,12 +303,19 @@ public:
             sahState = 0x6d2b79f5u;
         previousLfoPhase = lfoPhase;
         lfoSample = 0.0f;
+        envelopeReleasing = false;
+        previousRawEnvelope = 0.0f;
+        releaseReference = 0.0f;
         updateEnvelopeParameters();
         env.noteOn();
     }
 
     void stopNote (float, bool allowTailOff) override
     {
+        // Remember where the release starts so the curve falls away from the
+        // level that was actually held, not from a fixed reference.
+        envelopeReleasing = true;
+        releaseReference = previousRawEnvelope;
         env.noteOff();
         if (! allowTailOff)
             clearCurrentNote();
@@ -341,6 +348,9 @@ public:
         driftLevel = 0.0f;
         driftValue.fill (0.0f);
         noiseState = 0x6d2b79f5u;
+        envelopeReleasing = false;
+        previousRawEnvelope = 0.0f;
+        releaseReference = 0.0f;
     }
 
     void setSR (double newSampleRate)
@@ -430,6 +440,7 @@ public:
         auto* lfoShape = p.apvts.getRawParameterValue (ParamIDs::lfoShape);
         auto* unisonDriftParam = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
         auto* keyTracking = p.apvts.getRawParameterValue (ParamIDs::keyTracking);
+        auto* envCurveParam = p.apvts.getRawParameterValue (ParamIDs::envCurve);
         std::array<std::atomic<float>*, 4> modSourceParams {}, modDestinationParams {}, modAmountParams {};
         for (int slot = 0; slot < 4; ++slot)
         {
@@ -464,6 +475,8 @@ public:
             ? juce::jlimit (0, 2, juce::roundToInt (lfoShape->load())) : 0;
         driftLevel = unisonDriftParam != nullptr
             ? juce::jlimit (0.0f, 1.0f, unisonDriftParam->load()) : 0.0f;
+        envCurveAmount = envCurveParam != nullptr
+            ? juce::jlimit (0.0f, 1.0f, envCurveParam->load()) : 0.0f;
         const int activeUnisonVoices = juce::jlimit (1, maxUnisonVoices,
             juce::roundToInt (unisonVoicesParam->load()));
         for (int i = 0; i < numSamples; ++i)
@@ -501,7 +514,9 @@ public:
             }
             previousLfoPhase = lfoPhase;
             lfoPhase = std::fmod (lfoPhase + lfoStep, 1.0f);
-            const float envelope = env.getNextSample();
+            const float rawEnvelope = env.getNextSample();
+            const float envelope = shapeEnvelope (rawEnvelope);
+            previousRawEnvelope = rawEnvelope;
             float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f,
                   matrixFm = 0.0f, osc1FmAmount = 0.0f;
             for (int slot = 0; slot < 4; ++slot)
@@ -762,6 +777,43 @@ private:
         parameters.sustain = p.apvts.getRawParameterValue (ParamIDs::sustain)->load();
         parameters.release = p.apvts.getRawParameterValue (ParamIDs::release)->load();
         env.setParameters (parameters);
+        sustainLevel = juce::jlimit (0.0f, 1.0f, parameters.sustain);
+    }
+
+    // Roadmap P1.2: exponential (RC-style) amp envelope.  The juce::ADSR state
+    // machine and every stage timing stay exactly as they were; only the value
+    // presented to the voice is curved.  amount = 0 returns the raw value
+    // untouched, so legacy presets keep their linear release bit-for-bit.
+    // Attack eases into the peak, decay approaches the sustain level from
+    // above, and release falls away from the level held when the note ended.
+    float shapeEnvelope (float raw) noexcept
+    {
+        if (envCurveAmount <= 1.0e-4f)
+            return raw;
+
+        const float gamma = 1.0f + 3.0f * envCurveAmount;
+        const float value = juce::jlimit (0.0f, 1.0f, raw);
+
+        if (value > previousRawEnvelope)
+            return 1.0f - std::pow (1.0f - value, gamma);
+
+        if (value < previousRawEnvelope)
+        {
+            if (envelopeReleasing)
+            {
+                if (releaseReference > 1.0e-6f)
+                    return releaseReference
+                         * std::pow (value / releaseReference, gamma);
+                return value;
+            }
+
+            const float span = 1.0f - sustainLevel;
+            if (span > 1.0e-6f && value > sustainLevel)
+                return sustainLevel
+                     + span * std::pow ((value - sustainLevel) / span, gamma);
+        }
+
+        return value;
     }
 
     EonMiniEEFProcessor& p;
@@ -793,6 +845,10 @@ private:
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
                                unisonDetuneSmooth, unisonSpreadSmooth, amDepthSmooth;
     juce::SmoothedValue<float> filterDriveSmooth;
+    // Amp envelope curve state (roadmap P1.2).
+    float envCurveAmount = 0.0f, sustainLevel = 0.8f;
+    float previousRawEnvelope = 0.0f, releaseReference = 0.0f;
+    bool envelopeReleasing = false;
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
     std::array<float, maxUnisonVoices> ph1 {}, ph2 {}, ph3 {}, ph4 {};
 };
@@ -1056,6 +1112,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::decay, 0.001f, 5.0f, 0.3f);
     addFloat (ParamIDs::sustain, 0.0f, 1.0f, 0.8f);
     addFloat (ParamIDs::release, 0.001f, 8.0f, 0.4f);
+    addFloat (ParamIDs::envCurve, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::gain, 0.0f, 1.0f, 0.7f);
     addFloat (ParamIDs::drive, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
