@@ -14,7 +14,9 @@
 - per-voice phase, ADSR + 지수 곡선 옵션(envCurve, 기본 0=레거시 선형과 비트 동일),
   최대 8-voice unison, detune/stereo spread/phase
 - LFO, velocity 및 4-slot modulation matrix
-- Pitch/Cutoff/Amp/Osc2 FM 목적지와 bounded phase-FM
+- Pitch/Cutoff/Amp/Osc2 FM/PWM 목적지와 bounded phase-FM
+- 앰프와 별개인 전용 필터 엔벨로프(5파라미터, filterEnvAmount 기본 0=비트 동일)
+  로 cutoff를 ±5옥타브 스윕
 - LFO free-run/host tempo-sync, cutoff key tracking, 독립 Noise와 LFO AM
 - TPT state-variable LPF/HPF/BPF + LPF24(공진 스테이지 뒤 평탄 TPT 캐스케이드),
   cutoff/resonance smoothing

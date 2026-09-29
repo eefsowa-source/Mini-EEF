@@ -53,6 +53,14 @@ inline constexpr auto release = "release";
 // linear juce::ADSR response bit-identical; higher values bend attack, decay
 // and release toward the analog-style curves without changing their timings.
 inline constexpr auto envCurve = "envCurve";
+// Dedicated filter envelope.  filterEnvAmount is bipolar and defaults to 0,
+// which leaves the cutoff path bit-identical; the four stage times shape the
+// sweep when it is turned up.
+inline constexpr auto filterAttack = "filterAttack";
+inline constexpr auto filterDecay = "filterDecay";
+inline constexpr auto filterSustain = "filterSustain";
+inline constexpr auto filterRelease = "filterRelease";
+inline constexpr auto filterEnvAmount = "filterEnvAmount";
 inline constexpr auto gain = "gain";
 inline constexpr auto drive = "drive";
 // Roadmap step B: selectable drive curve and gentle amp-stage saturation.
