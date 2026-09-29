@@ -111,4 +111,5 @@ A~F 단계가 모두 완료됐다. 이 문서는 현재 코드(Source/PluginProc
 
 - P1.1 필터 드라이브 + 24 dB LPF24: 완료 (reports/2026-09-29-filter-drive-lpf24.md)
 - P1.2 지수형 앰프 엔벨로프: 완료 (reports/2026-09-29-envelope-curve.md)
-- P1.3 필터 전용 엔벨로프, P2 이하: 미착수
+- P1.3 필터 전용 엔벨로프 + PWM 목적지: 완료 (reports/2026-09-29-filter-envelope-pwm.md)
+- P2 이하: 미착수
