@@ -39,6 +39,10 @@ inline constexpr auto unisonDrift = "unisonDrift";
 inline constexpr auto voiceMode = "voiceMode";
 inline constexpr auto cutoff = "cutoff";
 inline constexpr auto resonance = "resonance";
+// Per-voice filter input drive: bounded tanh colouration evaluated inside the
+// selective 2x filter path.  The 0 default keeps the legacy filter input
+// bit-identical so existing presets retain their measured baselines.
+inline constexpr auto filterDrive = "filterDrive";
 // Filter topology: LPF is the legacy/default mode for preset compatibility.
 inline constexpr auto filterMode = "filterMode";
 inline constexpr auto attack = "attack";

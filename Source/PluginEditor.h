@@ -286,7 +286,7 @@ private:
     juce::TextButton initButton { "INIT" }, saveButton { "SAVE" }, loadButton { "LOAD" };
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::array<juce::Slider, 4> oscLevel, oscCoarse, oscFine, oscPhase, oscPan, oscPulseWidth;
-    juce::Slider noiseMix, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, attack, decay, sustain, release, cutoff, resonance, gain, drive, ampSaturation;
+    juce::Slider noiseMix, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, attack, decay, sustain, release, cutoff, resonance, filterDrive, gain, drive, ampSaturation;
     juce::Slider lfoRate, lfoDepth, lfoPitch, velocityAmount;
     juce::Slider fxWet, delayTime, delayFeedback, chorusDepth, chorusRate, chorusMix, reverbMix;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> osc1Attachment, osc2Attachment, osc3Attachment, osc4Attachment, modeAttachment, filterModeAttachment;
@@ -294,7 +294,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> driveCurveAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoShapeAttachment;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 4> oscLevelAttachment, oscCoarseAttachment, oscFineAttachment, oscPhaseAttachment, oscPanAttachment, oscPulseWidthAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, cutoffAttachment, resonanceAttachment, gainAttachment, driveAttachment, ampSatAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, cutoffAttachment, resonanceAttachment, filterDriveAttachment, gainAttachment, driveAttachment, ampSatAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoDepthAttachment, lfoPitchAttachment, velocityAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxWetAttachment, delayTimeAttachment, delayFeedbackAttachment, chorusDepthAttachment, chorusRateAttachment, chorusMixAttachment, reverbMixAttachment;
     float meterLeft = 0.0f, meterRight = 0.0f;

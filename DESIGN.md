@@ -15,7 +15,10 @@
 - LFO, velocity 및 4-slot modulation matrix
 - Pitch/Cutoff/Amp/Osc2 FM 목적지와 bounded phase-FM
 - LFO free-run/host tempo-sync, cutoff key tracking, 독립 Noise와 LFO AM
-- TPT state-variable LPF/HPF/BPF, cutoff/resonance smoothing
+- TPT state-variable LPF/HPF/BPF + LPF24(공진 스테이지 뒤 평탄 TPT 캐스케이드),
+  cutoff/resonance smoothing
+- 보이스별 필터 드라이브(tanh, 기본 0=레거시 비트 동일). 드라이브가 켜지면
+  선택적 2x 서브스텝 안에서 비선형을 호스트 레이트의 2배로 평가한다
 - 내부 drive, chorus/delay/reverb, DC blocker, soft limiter, peak meter
 - 1x/2x/4x oversampling 선택 (drive nonlinear stage)
 - APVTS 파라미터와 project/preset 상태 XML 저장
@@ -24,7 +27,7 @@
 
 ## 신호 경로
 
-`MIDI Note On/Off → voice allocation → Oscillator pair → mixer → per-voice LPF → ADSR → output`
+`MIDI Note On/Off → voice allocation → Oscillator pair → mixer → per-voice filter drive → per-voice LPF → ADSR → output`
 
 각 voice는 oscillator phase, envelope, filter state를 독립적으로 보유한다. voice allocator는 idle voice, release voice, oldest voice 순서로 선택한다. Pitch bend, aftertouch, sustain pedal, CC mapping과 MIDI Learn은 처리하지 않는다.
 

@@ -224,6 +224,9 @@ public:
         state.fill (0.0f);
         svfIc1.fill (0.0f);
         svfIc2.fill (0.0f);
+        svfIc3.fill (0.0f);
+        svfIc4.fill (0.0f);
+        filterInputPrev.fill (0.0f);
         constexpr std::array<const char*, 4> phaseIds {
             ParamIDs::osc1Phase, ParamIDs::osc2Phase, ParamIDs::osc3Phase, ParamIDs::osc4Phase
         };
@@ -266,6 +269,7 @@ public:
         resonanceSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::resonance, 0.15f));
         gainSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::gain, 0.7f));
         driveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::drive, 0.0f));
+        filterDriveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::filterDrive, 0.0f));
         noiseSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::noiseMix, 0.0f));
         unisonDetuneSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::unisonDetune, 0.0f));
         unisonSpreadSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::unisonSpread, 0.0f));
@@ -324,6 +328,9 @@ public:
         state.fill (0.0f);
         svfIc1.fill (0.0f);
         svfIc2.fill (0.0f);
+        svfIc3.fill (0.0f);
+        svfIc4.fill (0.0f);
+        filterInputPrev.fill (0.0f);
         ph1.fill (0.0f);
         ph2.fill (0.0f);
         ph3.fill (0.0f);
@@ -344,6 +351,7 @@ public:
         resonanceSmooth.reset (newSampleRate, 0.005);
         gainSmooth.reset (newSampleRate, 0.005);
         driveSmooth.reset (newSampleRate, 0.005);
+        filterDriveSmooth.reset (newSampleRate, 0.005);
         noiseSmooth.reset (newSampleRate, 0.005);
         unisonDetuneSmooth.reset (newSampleRate, 0.005);
         unisonSpreadSmooth.reset (newSampleRate, 0.005);
@@ -352,6 +360,7 @@ public:
         resonanceSmooth.setCurrentAndTargetValue (0.15f);
         gainSmooth.setCurrentAndTargetValue (0.7f);
         driveSmooth.setCurrentAndTargetValue (0.0f);
+        filterDriveSmooth.setCurrentAndTargetValue (0.0f);
         noiseSmooth.setCurrentAndTargetValue (0.0f);
         unisonDetuneSmooth.setCurrentAndTargetValue (0.0f);
         unisonSpreadSmooth.setCurrentAndTargetValue (0.0f);
@@ -407,6 +416,7 @@ public:
         auto* unisonSpreadParam = p.apvts.getRawParameterValue (ParamIDs::unisonSpread);
         auto* cutoff = p.apvts.getRawParameterValue (ParamIDs::cutoff);
         auto* resonance = p.apvts.getRawParameterValue (ParamIDs::resonance);
+        auto* filterDriveParam = p.apvts.getRawParameterValue (ParamIDs::filterDrive);
         auto* filterMode = p.apvts.getRawParameterValue (ParamIDs::filterMode);
         auto* gain = p.apvts.getRawParameterValue (ParamIDs::gain);
         auto* drive = p.apvts.getRawParameterValue (ParamIDs::drive);
@@ -435,6 +445,7 @@ public:
         resonanceSmooth.setTargetValue (resonance->load());
         gainSmooth.setTargetValue (gain->load());
         driveSmooth.setTargetValue (drive->load());
+        filterDriveSmooth.setTargetValue (filterDriveParam != nullptr ? filterDriveParam->load() : 0.0f);
         noiseSmooth.setTargetValue (noiseMixParam != nullptr ? noiseMixParam->load() : 0.0f);
         unisonDetuneSmooth.setTargetValue (unisonDetuneParam->load());
         unisonSpreadSmooth.setTargetValue (unisonSpreadParam != nullptr ? unisonSpreadParam->load() : 0.0f);
@@ -658,18 +669,34 @@ public:
                 resonanceSmooth.getNextValue());
             const float damping = juce::jlimit (0.08f, 2.0f,
                 2.0f - 1.92f * resonanceAmount);
+            // Dedicated per-voice filter drive: a bounded tanh colouration
+            // evaluated inside the selective 2x path below.  Zero keeps the
+            // legacy filter input bit-identical.
+            const float filterDriveAmount = juce::jlimit (0.0f, 1.0f,
+                filterDriveSmooth.getNextValue());
+            const bool filterDriveActive = filterDriveAmount > 1.0e-5f;
             // The TPT state-variable filter remains at the host rate for the
-            // broad, low-cost region.  Near the top octave or at high Q, two
-            // half-rate updates reduce coefficient warping and resonant edge
-            // error without adding plugin latency or an audio-thread buffer.
+            // broad, low-cost region.  Near the top octave, at high Q, or when
+            // the filter drive is active, two half-rate updates reduce
+            // coefficient warping and sample the drive non-linearity at
+            // twice the host rate, halving the fold depth of its products.
             const bool filterOversample = safeCutoff > 0.28f * static_cast<float> (sr)
-                                       || resonanceAmount > 0.72f;
+                                       || resonanceAmount > 0.72f
+                                       || filterDriveActive;
             const float filterRate = filterOversample
                 ? 2.0f * static_cast<float> (sr) : static_cast<float> (sr);
             const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff / filterRate);
             const float denominator = 1.0f + g * (g + damping);
+            // LPF24 cascades a second flat TPT stage (damping 2.0) behind the
+            // resonant stage: 24 dB/oct rolloff with the resonance still owned
+            // by stage one.  Each stage stays the proven unconditionally
+            // stable TPT integrator, so no new stability envelope is needed.
+            const float cascadeDenominator = 1.0f + g * (g + 2.0f);
             const int selectedFilter = filterMode != nullptr
-                ? juce::jlimit (0, 2, juce::roundToInt (filterMode->load())) : 0;
+                ? juce::jlimit (0, 3, juce::roundToInt (filterMode->load())) : 0;
+            const int stageOneMode = selectedFilter == 3 ? 0 : selectedFilter;
+            const float filterDriveGain = 1.0f + 5.0f * filterDriveAmount;
+            const float filterDriveNorm = std::tanh (filterDriveGain);
             const std::array<float, 2> stereoInput { unisonLeft, unisonRight };
             const int channels = juce::jmin (2, buffer.getNumChannels());
             for (int channel = 0; channel < channels; ++channel)
@@ -684,11 +711,35 @@ public:
                                          p.selectedDriveCurve())
                     : filterInput;
                 const size_t index = static_cast<size_t> (channel);
-                float filtered = processTptSvf (x, g, damping, denominator, selectedFilter,
+                // With filter drive active the two sub-steps evaluate the
+                // curve on linear-interpolated inputs (midpoint, endpoint) so
+                // the non-linearity is sampled at twice the host rate.
+                // Without drive both steps share the input, preserving the
+                // established half-step filter behaviour bit-for-bit.
+                float firstStepInput = x;
+                float secondStepInput = x;
+                if (filterDriveActive)
+                {
+                    firstStepInput = std::tanh (0.5f * (x + filterInputPrev[index])
+                                                * filterDriveGain) / filterDriveNorm;
+                    secondStepInput = std::tanh (x * filterDriveGain) / filterDriveNorm;
+                }
+                filterInputPrev[index] = x;
+                float filtered = processTptSvf (firstStepInput, g, damping, denominator,
+                                                stageOneMode,
                                                 svfIc1[index], svfIc2[index]);
+                if (selectedFilter == 3)
+                    filtered = processTptSvf (filtered, g, 2.0f, cascadeDenominator, 0,
+                                              svfIc3[index], svfIc4[index]);
                 if (filterOversample)
-                    filtered = processTptSvf (x, g, damping, denominator, selectedFilter,
-                                             svfIc1[index], svfIc2[index]);
+                {
+                    filtered = processTptSvf (secondStepInput, g, damping, denominator,
+                                              stageOneMode,
+                                              svfIc1[index], svfIc2[index]);
+                    if (selectedFilter == 3)
+                        filtered = processTptSvf (filtered, g, 2.0f, cascadeDenominator, 0,
+                                                  svfIc3[index], svfIc4[index]);
+                }
                 state[index] = filtered;
                 state[index] = std::isfinite (state[index]) ? juce::jlimit (-8.0f, 8.0f, state[index]) : 0.0f;
                 // Filter first, then apply the amp envelope/output gain.  This
@@ -732,11 +783,16 @@ private:
         return static_cast<float> (stateValue >> 8) / 16777216.0f;
     }
     std::array<float, 2> state {}, svfIc1 {}, svfIc2 {};
+    // Stage two of the LPF24 cascade and the previous raw filter input used
+    // by the drive midpoint evaluation.  Both reset with the legacy states.
+    std::array<float, 2> svfIc3 {}, svfIc4 {};
+    std::array<float, 2> filterInputPrev {};
     std::uint32_t noiseState = 0x6d2b79f5u;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
     juce::SmoothedValue<float> resonanceSmooth;
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
                                unisonDetuneSmooth, unisonSpreadSmooth, amDepthSmooth;
+    juce::SmoothedValue<float> filterDriveSmooth;
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
     std::array<float, maxUnisonVoices> ph1 {}, ph2 {}, ph3 {}, ph4 {};
 };
@@ -992,8 +1048,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::unisonDrift, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::cutoff, 20.0f, 20000.0f, 12000.0f);
     addFloat (ParamIDs::resonance, 0.0f, 1.0f, 0.15f);
+    addFloat (ParamIDs::filterDrive, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
-        ParamIDs::filterMode, "Filter Mode", juce::StringArray { "LPF", "HPF", "BPF" }, 0));
+        ParamIDs::filterMode, "Filter Mode",
+        juce::StringArray { "LPF", "HPF", "BPF", "LPF24" }, 0));
     addFloat (ParamIDs::attack, 0.001f, 5.0f, 0.01f);
     addFloat (ParamIDs::decay, 0.001f, 5.0f, 0.3f);
     addFloat (ParamIDs::sustain, 0.0f, 1.0f, 0.8f);
