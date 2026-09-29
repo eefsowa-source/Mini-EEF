@@ -67,6 +67,9 @@ Release 바이너리 SHA256:
 1. `melatonin_inspector` FetchContent가 기본 `<name>-src` 디렉터리로 받아져
    `juce_add_module`이 모듈 헤더를 찾지 못하고 모든 재구성이 실패했다.
    `SOURCE_DIR`을 `melatonin_inspector`로 고정해 해결했다(Debug 링크 계약은 유지).
+   이후 사용자 요청으로 인스펙터 WIP 자체를 제거했고, 재도입 시에는 이
+   `SOURCE_DIR` 지정이 다시 필요하다. 제거 시 Release 바이너리 해시는
+   `5ce7c8ac…`로 변하지 않아 Debug 전용 링크였음이 확인됐다.
 2. `Build-Git2/CMakeCache.txt`의 `JUCE_SOURCE_DIR`이 `$PWD/...` 리터럴로
    기록되어 재구성이 실패했다. 실제 `Build-Git2/_deps/juce-src` 절대경로로 교정했다.
 
@@ -75,4 +78,3 @@ Release 바이너리 SHA256:
 이 측정은 새 드라이브/LPF24 음색의 청감 우위를 증명하지 않는다. CPU 비용,
 호스트 로드, 레벨 매칭 청취는 별도 게이트다. 설치된 VST3/AU 번들은 아직
 이 빌드로 갱신하지 않았으므로 호스트 결과는 새 해시로 다시 받아야 한다.
-
