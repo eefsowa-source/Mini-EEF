@@ -90,6 +90,47 @@ void setFilterProbe (EonMiniEEFProcessor& probe, float filterDriveValue,
     setPlain (ParamIDs::filterMode, static_cast<float> (filterModeValue));
 }
 
+// P1.2 envelope probe: renders one held note with a scheduled note-off and
+// captures the output from sample zero so attack and release shapes can be
+// compared as peak envelopes.
+template <size_t Capacity>
+void renderNoteWindow (EonMiniEEFProcessor& probe, int noteOffSample,
+                       std::array<float, Capacity>& window)
+{
+    probe.prepareToPlay (probeSampleRate, probeBlockSize);
+    for (int blockStart = 0; blockStart < droneTotalSamples; blockStart += probeBlockSize)
+    {
+        juce::AudioBuffer<float> buffer (2, probeBlockSize);
+        juce::MidiBuffer midi;
+        if (blockStart == 0)
+            midi.addEvent (juce::MidiMessage::noteOn (1, 93, (juce::uint8) 100), 0);
+        if (noteOffSample >= blockStart && noteOffSample < blockStart + probeBlockSize)
+            midi.addEvent (juce::MidiMessage::noteOff (1, 93), noteOffSample - blockStart);
+        probe.processBlock (buffer, midi);
+        for (int sample = 0; sample < probeBlockSize; ++sample)
+        {
+            const int absoluteSample = blockStart + sample;
+            if (absoluteSample >= 0 && absoluteSample < static_cast<int> (Capacity))
+                window[static_cast<size_t> (absoluteSample)] = buffer.getSample (0, sample);
+        }
+    }
+}
+
+// Peak magnitude of a short window centred on the requested sample.  The
+// window is long enough to contain whole cycles of the probe sine, so the
+// measured value tracks the amplitude envelope rather than a single sample.
+template <size_t Capacity>
+double envelopePeakAt (const std::array<float, Capacity>& window, int centreSample,
+                       int halfWidth)
+{
+    double peak = 0.0;
+    const int first = juce::jmax (0, centreSample - halfWidth);
+    const int last = juce::jmin (static_cast<int> (Capacity) - 1, centreSample + halfWidth);
+    for (int index = first; index <= last; ++index)
+        peak = juce::jmax (peak, static_cast<double> (std::abs (window[static_cast<size_t> (index)])));
+    return peak;
+}
+
 void renderDroneWindow (EonMiniEEFProcessor& probe, std::array<float, analysisLength>& window)
 {
     probe.prepareToPlay (probeSampleRate, probeBlockSize);
@@ -333,6 +374,81 @@ int main()
                   << " | " << r.aliasRatioDeep << " |\n";
     }
 
+    // P1.2 probe: amp envelope curve.  A 0.2 s attack, a short hold at full
+    // sustain, then a 0.2 s release makes the shaping measurable as a peak
+    // envelope: the linear reference must read a quarter of the way up at a
+    // quarter of the attack time, while the curved version is already near
+    // the peak and falls away faster once released.
+    constexpr double envelopeAttackSeconds = 0.2;
+    constexpr double envelopeReleaseSeconds = 0.2;
+    constexpr int envelopeAttackSamples = static_cast<int> (envelopeAttackSeconds * probeSampleRate);
+    constexpr int envelopeReleaseSamples = static_cast<int> (envelopeReleaseSeconds * probeSampleRate);
+    constexpr int envelopeHoldSamples = 4800;
+    constexpr int envelopeNoteOff = envelopeAttackSamples + envelopeHoldSamples;
+    constexpr int envelopeHalfWidth = 32;
+    constexpr std::array<float, 2> envelopeCurves { 0.0f, 1.0f };
+    struct EnvelopeReport
+    {
+        double peak = 0.0;
+        double attackQuarter = 0.0, attackThreeQuarter = 0.0;
+        double sustain = 0.0;
+        double releaseQuarter = 0.0, releaseThreeQuarter = 0.0;
+    };
+    std::array<EnvelopeReport, 2> envelopeReports {};
+    std::cout << "| envCurve | peak | atk 25% | atk 75% | sustain | rel 25% | rel 75% |\n"
+              << "|---|---|---|---|---|---|---|\n";
+    for (size_t index = 0; index < envelopeCurves.size(); ++index)
+    {
+        EonMiniEEFProcessor probe;
+        if (! configureSineProbe (probe, 0.0f))
+        {
+            std::cerr << "envelope probe could not configure the sine voice\n";
+            return 1;
+        }
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        setPlain (ParamIDs::attack, static_cast<float> (envelopeAttackSeconds));
+        setPlain (ParamIDs::decay, 0.001f);
+        setPlain (ParamIDs::sustain, 1.0f);
+        setPlain (ParamIDs::release, static_cast<float> (envelopeReleaseSeconds));
+        setPlain (ParamIDs::envCurve, envelopeCurves[index]);
+        setOversamplingMode (probe, 0);
+
+        std::array<float, analysisLength> window {};
+        renderNoteWindow (probe, envelopeNoteOff, window);
+        for (const float sample : window)
+            if (! std::isfinite (sample))
+            {
+                std::cerr << "envelope probe produced non-finite output (envCurve="
+                          << envelopeCurves[index] << ")\n";
+                return 1;
+            }
+
+        auto& report = envelopeReports[index];
+        report.peak = envelopePeakAt (window, envelopeAttackSamples + envelopeHoldSamples / 2,
+                                      envelopeHalfWidth);
+        report.attackQuarter = envelopePeakAt (window, envelopeAttackSamples / 4, envelopeHalfWidth);
+        report.attackThreeQuarter = envelopePeakAt (window, 3 * envelopeAttackSamples / 4,
+                                                    envelopeHalfWidth);
+        report.sustain = envelopePeakAt (window, envelopeNoteOff - envelopeHoldSamples / 2,
+                                         envelopeHalfWidth);
+        report.releaseQuarter = envelopePeakAt (window, envelopeNoteOff + envelopeReleaseSamples / 4,
+                                                envelopeHalfWidth);
+        report.releaseThreeQuarter = envelopePeakAt (window,
+                                                     envelopeNoteOff + 3 * envelopeReleaseSamples / 4,
+                                                     envelopeHalfWidth);
+        std::cout << "| " << envelopeCurves[index]
+                  << " | " << report.peak
+                  << " | " << report.attackQuarter
+                  << " | " << report.attackThreeQuarter
+                  << " | " << report.sustain
+                  << " | " << report.releaseQuarter
+                  << " | " << report.releaseThreeQuarter << " |\n";
+    }
+
     // Gates. The THD numbers document the tanh() baseline; the structural
     // assertions catch regressions, not tuning preferences.
     const bool cleanSine = reports[0][0].thd < 0.01;
@@ -366,6 +482,21 @@ int main()
     const bool lp24Steeper
         = rolloffReports[1].harmonicDb[3] < rolloffReports[0].harmonicDb[3] - 6.0;
 
+    // P1.2 gates: the curved envelope must rise faster through the attack and
+    // fall away faster after note-off than the linear reference, while the
+    // held sustain level stays identical and nothing exceeds full scale.
+    const bool envCurveAttackFaster
+        = envelopeReports[1].attackQuarter > 1.5 * envelopeReports[0].attackQuarter;
+    const bool envCurveReleaseFaster
+        = envelopeReports[1].releaseQuarter < 0.6 * envelopeReports[0].releaseQuarter;
+    const bool envCurveSustainHeld
+        = envelopeReports[0].sustain > 0.05
+       && std::abs (envelopeReports[1].sustain - envelopeReports[0].sustain)
+            <= 0.02 * envelopeReports[0].sustain;
+    const bool envCurveBounded
+        = std::isfinite (envelopeReports[0].peak) && std::isfinite (envelopeReports[1].peak)
+       && envelopeReports[0].peak <= 1.05 && envelopeReports[1].peak <= 1.05;
+
     // Aliasing is not gated here: a single sine into tanh() at these levels
     // keeps the 15th+ fold lines below the window-leakage floor, so a
     // fold-line ratio would compare floor noise. The deep-clip pulse drone
@@ -380,11 +511,17 @@ int main()
               << " filterDriveAddsHarmonics=" << (filterDriveAddsHarmonics ? "PASS" : "FAIL")
               << " filterDriveBounded=" << (filterDriveBounded ? "PASS" : "FAIL")
               << " lp24Steeper=" << (lp24Steeper ? "PASS" : "FAIL")
+              << " envCurveAttackFaster=" << (envCurveAttackFaster ? "PASS" : "FAIL")
+              << " envCurveReleaseFaster=" << (envCurveReleaseFaster ? "PASS" : "FAIL")
+              << " envCurveSustainHeld=" << (envCurveSustainHeld ? "PASS" : "FAIL")
+              << " envCurveBounded=" << (envCurveBounded ? "PASS" : "FAIL")
               << " (alias gating owned by PresetSmoke regression)\n";
 
     if (! cleanSine || ! driveAddsHarmonics || ! dcControlled
         || ! curvesDistinct || ! curvesBounded || ! curvesDcOk
-        || ! filterDriveAddsHarmonics || ! filterDriveBounded || ! lp24Steeper)
+        || ! filterDriveAddsHarmonics || ! filterDriveBounded || ! lp24Steeper
+        || ! envCurveAttackFaster || ! envCurveReleaseFaster
+        || ! envCurveSustainHeld || ! envCurveBounded)
     {
         std::cerr << "THD drive baseline gate failed\n";
         return 1;
