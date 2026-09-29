@@ -174,6 +174,41 @@ void setFilterEnvelope (EonMiniEEFProcessor& probe, float attack, float decay,
     setPlain (ParamIDs::filterEnvAmount, amount);
 }
 
+// P2 probe helpers: per-voice variance amount and the mono/stereo comparison
+// of the decorrelated noise layer.
+void setVoiceVariance (EonMiniEEFProcessor& probe, float amount)
+{
+    if (auto* parameter = probe.apvts.getParameter (ParamIDs::voiceVariance))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (amount));
+}
+
+// Renders the same held note twice, once per output channel, so the noise
+// layer's stereo decorrelation can be measured as an inter-channel
+// difference.  A mono noise source reads zero here; independent seeds do not.
+void renderStereoWindow (EonMiniEEFProcessor& probe,
+                         std::array<float, analysisLength>& left,
+                         std::array<float, analysisLength>& right)
+{
+    probe.prepareToPlay (probeSampleRate, probeBlockSize);
+    for (int blockStart = 0; blockStart < droneTotalSamples; blockStart += probeBlockSize)
+    {
+        juce::AudioBuffer<float> buffer (2, probeBlockSize);
+        juce::MidiBuffer midi;
+        if (blockStart == 0)
+            midi.addEvent (juce::MidiMessage::noteOn (1, 93, (juce::uint8) 100), 0);
+        probe.processBlock (buffer, midi);
+        for (int sample = 0; sample < probeBlockSize; ++sample)
+        {
+            const int absoluteSample = blockStart + sample;
+            if (absoluteSample >= analysisStart)
+            {
+                left[(size_t) (absoluteSample - analysisStart)] = buffer.getSample (0, sample);
+                right[(size_t) (absoluteSample - analysisStart)] = buffer.getSample (1, sample);
+            }
+        }
+    }
+}
+
 void renderDroneWindow (EonMiniEEFProcessor& probe, std::array<float, analysisLength>& window)
 {
     probe.prepareToPlay (probeSampleRate, probeBlockSize);
@@ -644,6 +679,149 @@ int main()
     const bool filterEnvAmountOffStatic = filterEnvReports[0].ratio < 1.3;
     const bool pwmDestinationWorks = pwmSecondHarmonic[1] > pwmSecondHarmonic[0] + 20.0;
 
+    // P2 probe: per-voice variance.  The same note is rendered twice, once
+    // with the variance amount at 0 and once at 1, and the two windows are
+    // compared sample by sample.  A non-zero difference proves the seeded
+    // offsets really reach the output; a second render at amount 1 must match
+    // the first exactly, which is the reproducibility half of the contract.
+    const auto renderSingleNoteWindow = [] (EonMiniEEFProcessor& probe, int note,
+                                            std::array<float, analysisLength>& window)
+    {
+        probe.prepareToPlay (probeSampleRate, probeBlockSize);
+        for (int blockStart = 0; blockStart < droneTotalSamples; blockStart += probeBlockSize)
+        {
+            juce::AudioBuffer<float> buffer (2, probeBlockSize);
+            juce::MidiBuffer midi;
+            if (blockStart == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, note, (juce::uint8) 100), 0);
+            probe.processBlock (buffer, midi);
+            for (int sample = 0; sample < probeBlockSize; ++sample)
+            {
+                const int absoluteSample = blockStart + sample;
+                if (absoluteSample >= analysisStart)
+                    window[(size_t) (absoluteSample - analysisStart)] = buffer.getSample (0, sample);
+            }
+        }
+    };
+    const auto configureVarianceProbe = [] (EonMiniEEFProcessor& probe, float amount)
+    {
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        configureSineProbe (probe, 0.0f);
+        setPlain (ParamIDs::voiceMode, 0.0f);
+        setPlain (ParamIDs::cutoff, 400.0f);
+        setPlain (ParamIDs::resonance, 0.1f);
+        setPlain (ParamIDs::attack, 0.02f);
+        setPlain (ParamIDs::decay, 0.3f);
+        setPlain (ParamIDs::sustain, 0.7f);
+        setPlain (ParamIDs::release, 0.3f);
+        setVoiceVariance (probe, amount);
+    };
+    // Peak-normalised RMS difference: 0 means the two renders are identical,
+    // which is what the legacy path promises for amount 0.
+    const auto normalisedDifference = [] (const std::array<float, analysisLength>& first,
+                                          const std::array<float, analysisLength>& second)
+    {
+        double sum = 0.0;
+        double peak = 0.0;
+        for (size_t sample = 0; sample < first.size(); ++sample)
+        {
+            const double difference = (double) first[sample] - (double) second[sample];
+            sum += difference * difference;
+            peak = juce::jmax (peak, std::abs ((double) first[sample]));
+        }
+        return std::sqrt (sum / (double) first.size()) / juce::jmax (1.0e-9, peak);
+    };
+    // Two pitches are used so the gate shows the offsets are per-voice and
+    // not one global trim: both notes must move away from their own amount-0
+    // reference, by different amounts.
+    constexpr std::array<int, 2> varianceNotes { 60, 67 };
+    struct VarianceReport { double differenceFromOff = 0.0, repeatDifference = 0.0; };
+    std::array<VarianceReport, 2> varianceReports {};
+    std::cout << "| note | diff vs variance=0 | repeat diff |\n|---|---|---|\n";
+    for (size_t index = 0; index < varianceNotes.size(); ++index)
+    {
+        EonMiniEEFProcessor offProbe, onProbe, repeatProbe;
+        configureVarianceProbe (offProbe, 0.0f);
+        configureVarianceProbe (onProbe, 1.0f);
+        configureVarianceProbe (repeatProbe, 1.0f);
+        std::array<float, analysisLength> offWindow {}, onWindow {}, repeatWindow {};
+        renderSingleNoteWindow (offProbe, varianceNotes[index], offWindow);
+        renderSingleNoteWindow (onProbe, varianceNotes[index], onWindow);
+        renderSingleNoteWindow (repeatProbe, varianceNotes[index], repeatWindow);
+        bool finite = true;
+        for (const float sample : onWindow)
+            finite = finite && std::isfinite (sample);
+        if (! finite)
+        {
+            std::cerr << "voice variance probe produced non-finite output\n";
+            return 1;
+        }
+
+        auto& report = varianceReports[index];
+        report.differenceFromOff = normalisedDifference (offWindow, onWindow);
+        report.repeatDifference = normalisedDifference (onWindow, repeatWindow);
+        std::cout << "| " << varianceNotes[index]
+                  << " | " << report.differenceFromOff
+                  << " | " << report.repeatDifference << " |\n";
+    }
+
+    // P2 probe: stereo noise decorrelation.  A single sine with the noise
+    // layer alone gives an inter-channel difference of exactly zero before the
+    // change and a finite, non-zero value with independent right-channel
+    // seeds.  The gate below only asserts that independence, not its level.
+    std::array<double, 2> noiseChannelDifference {};
+    std::cout << "| noise mix | L-R rms |\n|---|---|\n";
+    for (size_t index = 0; index < 2; ++index)
+    {
+        EonMiniEEFProcessor probe;
+        if (! configureSineProbe (probe, 0.0f))
+        {
+            std::cerr << "stereo noise probe could not configure the sine voice\n";
+            return 1;
+        }
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        setPlain (ParamIDs::noiseMix, index == 0 ? 0.0f : 0.5f);
+        setOversamplingMode (probe, 0);
+        std::array<float, analysisLength> left {}, right {};
+        renderStereoWindow (probe, left, right);
+        double sum = 0.0;
+        for (size_t sample = 0; sample < left.size(); ++sample)
+        {
+            const double difference = (double) left[sample] - (double) right[sample];
+            sum += difference * difference;
+        }
+        noiseChannelDifference[index] = std::sqrt (sum / (double) left.size());
+        std::cout << "| " << (index == 0 ? 0.0f : 0.5f)
+                  << " | " << noiseChannelDifference[index] << " |\n";
+    }
+
+    // P2 gates: seeded per-voice offsets must stay reproducible across runs
+    // and must actually change the chord, while the stereo noise layer must
+    // read exactly correlated with no noise and decorrelated once it is on.
+    const bool voiceVarianceDeterministic = varianceReports[0].repeatDifference == 0.0
+                                         && varianceReports[1].repeatDifference == 0.0;
+    // The three seeded offsets are uniform in +/-40 cents (cutoff),
+    // +/-25% (envelope times) and +/-15% (level).  A single note therefore
+    // lands anywhere in that band, and the 20 ms attack window used here
+    // measures the envelope-time share of it.  0.5% peak-normalised deviation
+    // sits well above float rounding (repeat renders read exactly 0) while
+    // staying inside the range any seeded draw can reach; asserting a fixed
+    // fraction of the maximum would be asserting one particular random draw.
+    const bool voiceVarianceAudible = varianceReports[0].differenceFromOff > 0.005
+                                   && varianceReports[1].differenceFromOff > 0.005
+                                   && std::abs (varianceReports[0].differenceFromOff
+                                              - varianceReports[1].differenceFromOff) > 1.0e-4;
+    const bool noiseStereoDecorrelated
+        = noiseChannelDifference[0] == 0.0 && noiseChannelDifference[1] > 1.0e-6;
+
     // Aliasing is not gated here: a single sine into tanh() at these levels
     // keeps the 15th+ fold lines below the window-leakage floor, so a
     // fold-line ratio would compare floor noise. The deep-clip pulse drone
@@ -665,6 +843,9 @@ int main()
               << " filterEnvSweepsCutoff=" << (filterEnvSweepsCutoff ? "PASS" : "FAIL")
               << " filterEnvAmountOffStatic=" << (filterEnvAmountOffStatic ? "PASS" : "FAIL")
               << " pwmDestinationWorks=" << (pwmDestinationWorks ? "PASS" : "FAIL")
+              << " voiceVarianceDeterministic=" << (voiceVarianceDeterministic ? "PASS" : "FAIL")
+              << " voiceVarianceAudible=" << (voiceVarianceAudible ? "PASS" : "FAIL")
+              << " noiseStereoDecorrelated=" << (noiseStereoDecorrelated ? "PASS" : "FAIL")
               << " (alias gating owned by PresetSmoke regression)\n";
 
     if (! cleanSine || ! driveAddsHarmonics || ! dcControlled
@@ -673,7 +854,9 @@ int main()
         || ! envCurveAttackFaster || ! envCurveReleaseFaster
         || ! envCurveSustainHeld || ! envCurveBounded
         || ! filterEnvSweepsCutoff || ! filterEnvAmountOffStatic
-        || ! pwmDestinationWorks)
+        || ! pwmDestinationWorks
+        || ! voiceVarianceDeterministic || ! voiceVarianceAudible
+        || ! noiseStereoDecorrelated)
     {
         std::cerr << "THD drive baseline gate failed\n";
         return 1;
