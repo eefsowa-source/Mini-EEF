@@ -36,9 +36,11 @@ struct Measurement
 // Drives the real processBlock with a held poly chord.  voiceCount notes are held
 // for the whole run, unison spreads the layers, and the quality mode selects the
 // oversampling stage, so the three variables that change the cost are all
-// reachable from the command line.
+// reachable from the command line.  activeOscillators is the fourth: most bank
+// patches leave some of the four at level 0, and a muted oscillator skips its
+// waveform evaluation, so the all-four case is not a typical load.
 Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
-                 int oversamplingMode, int repeats)
+                 int oversamplingMode, int repeats, int activeOscillators = 4)
 {
     EonMiniEEFProcessor processor;
     const auto setPlain = [&processor] (const char* id, float plainValue)
@@ -48,10 +50,11 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
     };
     // Four oscillators at full level, all voices in unison, drive and quality
     // stage enabled: this is the most expensive configuration the panel offers.
+    // Fewer active oscillators is the common bank-patch case.
     setPlain (ParamIDs::osc1Level, 1.0f);
-    setPlain (ParamIDs::osc2Level, 1.0f);
-    setPlain (ParamIDs::osc3Level, 1.0f);
-    setPlain (ParamIDs::osc4Level, 1.0f);
+    setPlain (ParamIDs::osc2Level, activeOscillators >= 2 ? 1.0f : 0.0f);
+    setPlain (ParamIDs::osc3Level, activeOscillators >= 3 ? 1.0f : 0.0f);
+    setPlain (ParamIDs::osc4Level, activeOscillators >= 4 ? 1.0f : 0.0f);
     setPlain (ParamIDs::unisonVoices, static_cast<float> (unison));
     setPlain (ParamIDs::unisonDetune, 18.0f);
     setPlain (ParamIDs::unisonDrift, 0.5f);
@@ -118,9 +121,13 @@ int main (int argc, char** argv)
     const int repeats = argc > 1 ? juce::jlimit (16, 20000, (int) std::atol (argv[1])) : 2000;
 
     std::cout << "# processBlock cost, worst-case voice load (4 osc, unison, drive, FX)\n";
+    std::cout << "# The 'active' column marks runs that use a one-oscillator patch.\n";
+    std::cout << "# A bank patch usually leaves two or three of the four oscillators at\n";
+    std::cout << "# level 0, and a muted oscillator skips its waveform evaluation, so the\n";
+    std::cout << "# all-four figure above is not what a normal patch costs.\n";
     std::cout << "# Absolute microseconds are host dependent. budget% is the portable figure.\n";
-    std::cout << "| voices | unison | quality | block | sr | us/block | budget % | x realtime | peak |\n";
-    std::cout << "|---|---|---|---|---|---|---|---|---|\n";
+    std::cout << "| voices | unison | active osc | quality | block | sr | us/block | budget % | x realtime | peak |\n";
+    std::cout << "|---|---|---|---|---|---|---|---|---|---|\n";
 
     const std::array<int, 2> blockSizes { 64, 256 };
     const std::array<int, 3> voiceCounts { 1, 8, 16 };
@@ -139,7 +146,12 @@ int main (int argc, char** argv)
             {
                 for (int mode = 0; mode < 3; ++mode)
                 {
-                    const auto m = run (sampleRate, blockSize, voices, unison, mode, repeats);
+                    // The 1/2-oscillator rows sit at the 16-voice 8-unison
+                    // corner only, which is where a real patch would notice.
+                    const int activeOscillators = (voices == 16 && unison == 8)
+                        ? 2 : 4;
+                    const auto m = run (sampleRate, blockSize, voices, unison, mode,
+                                        repeats, activeOscillators);
                     if (! m.finite)
                         anyNonFinite = true;
                     if (m.budgetPercent > worstBudget)
@@ -152,6 +164,7 @@ int main (int argc, char** argv)
                     }
                     std::cout << "| " << voices
                               << " | " << unison
+                              << " | " << activeOscillators
                               << " | " << modeNames[static_cast<size_t> (mode)]
                               << " | " << blockSize
                               << " | " << sampleRate

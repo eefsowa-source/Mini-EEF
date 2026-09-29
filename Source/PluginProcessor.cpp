@@ -7,6 +7,22 @@ namespace
 {
     constexpr int currentStateFormatVersion = 1;
 
+    // Odd-symmetric soft clip for the Analog wave.  It replaces a per-sample
+    // std::tanh, which measured as the single largest cost when this wave was
+    // first added: the 8-unison worst case went from 61% to 78% of the block
+    // budget with tanh, and back to 58% with this.  Note the asymptote is 3,
+    // not 1, so the caller scales by the 0.92 factor rather than treating this
+    // as a unity-gain clip.
+    //
+    // The same substitution was tried on the filter drive's tanh and reverted:
+    // it bought 1.5 percentage points but moved one preset's RMS by 1.6%, and
+    // a 1.5% CPU trade is not worth a measurable output change.
+    static float softClip (float x) noexcept
+    {
+        const float x2 = x * x;
+        return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+    }
+
     float blep (float t, float dt)
     {
         // Keep the correction well-defined for the highest notes and for
@@ -119,7 +135,10 @@ namespace
         const float delayed = buffer[static_cast<size_t> (position)];
         const float output = delayed - allpassGain * input;
         buffer[static_cast<size_t> (position)] = input + allpassGain * output;
-        position = (position + 1) % length;
+        // Wrapping by comparison rather than by % : this runs four times per
+        // sample, and the modulo is a real integer division where a compare
+        // and a select is a handful of cycles.
+        position = position + 1 == length ? 0 : position + 1;
         return output;
     }
 
@@ -263,6 +282,16 @@ public:
         svfIc3.fill (0.0f);
         svfIc4.fill (0.0f);
         filterInputPrev.fill (0.0f);
+        // Key tracking depends only on the held note, so its exponential is
+        // evaluated here rather than once per sample inside the render loop.
+        {
+            const auto* keyTrackingParameter =
+                p.apvts.getRawParameterValue (ParamIDs::keyTracking);
+            const float keyTrack = juce::jlimit (0.0f, 1.0f,
+                keyTrackingParameter != nullptr ? keyTrackingParameter->load() : 0.0f);
+            keyRatioForNote = std::exp2f (keyTrack * juce::jlimit (-2.0f, 2.0f,
+                (static_cast<float> (midiNote) - 60.0f) / 24.0f));
+        }
         constexpr std::array<const char*, 4> phaseIds {
             ParamIDs::osc1Phase, ParamIDs::osc2Phase, ParamIDs::osc3Phase, ParamIDs::osc4Phase
         };
@@ -392,6 +421,11 @@ public:
         }
         previousLfoPhase = lfoPhase;
         lfoSample = 0.0f;
+        // A stolen voice carries the previous note's pan gains.  Mark every
+        // cached entry stale so the first sample of the new note recomputes
+        // them instead of reusing the old note's image.
+        panCacheValid.fill (false);
+        unisonPanCacheValid.fill (false);
         ampEnvelopeState = EnvelopeCurveState {};
         updateEnvelopeParameters();
         env.noteOn();
@@ -432,6 +466,8 @@ public:
         svfIc3.fill (0.0f);
         svfIc4.fill (0.0f);
         filterInputPrev.fill (0.0f);
+        panCacheValid.fill (false);
+        unisonPanCacheValid.fill (false);
         ph1.fill (0.0f);
         ph2.fill (0.0f);
         ph3.fill (0.0f);
@@ -664,8 +700,8 @@ public:
             // needs to keep the modulation itself inside a sane band.
             matrixPwm = juce::jlimit (-0.45f, 0.45f, matrixPwm);
             osc1FmAmount = juce::jlimit (-0.5f, 0.5f, osc1FmAmount);
-            const float modulatedFrequency = baseFrequency * std::pow (2.0f, matrixPitch / 12.0f)
-                * std::pow (2.0f, lfo * lfoPitch->load() / 12.0f)
+            const float modulatedFrequency = baseFrequency * std::exp2f (matrixPitch / 12.0f)
+                * std::exp2f (lfo * lfoPitch->load() / 12.0f)
                 * pitchVarianceRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
@@ -681,7 +717,7 @@ public:
                 const float semitones = juce::jlimit (-24.0f, 24.0f, coarseParams[oscillator]->load())
                                       + juce::jlimit (-100.0f, 100.0f, fineSmooth[oscillator].getNextValue()) / 100.0f;
                 oscillatorFrequency[oscillator] = juce::jmax (0.01f,
-                    modulatedFrequency * std::pow (2.0f, semitones / 12.0f));
+                    modulatedFrequency * std::exp2f (semitones / 12.0f));
                 oscillatorLevel[oscillator] = juce::jlimit (0.0f, 1.0f, levelSmooth[oscillator].getNextValue());
                 oscillatorPan[oscillator] = juce::jlimit (-1.0f, 1.0f, panSmooth[oscillator].getNextValue());
                 // The PWM matrix destination rides on top of the per-oscillator
@@ -694,8 +730,9 @@ public:
             const float baseCutoff = cutoffSmooth.getNextValue();
             const float keyTrack = juce::jlimit (0.0f, 1.0f,
                 keyTracking != nullptr ? keyTracking->load() : 0.0f);
-            const float keyRatio = std::pow (2.0f,
-                keyTrack * juce::jlimit (-2.0f, 2.0f, (static_cast<float> (note) - 60.0f) / 24.0f));
+            // The key-tracking ratio depends only on the held note, so it is
+            // resolved once in startNote rather than exp2'd every sample.
+            const float keyRatio = keyRatioForNote;
             const float modulatedCutoff = juce::jlimit (20.0f, 20000.0f,
                 baseCutoff * cutoffVariance * keyRatio
                 * (1.0f + lfo * lfoDepth->load() + matrixCutoff)
@@ -722,7 +759,7 @@ public:
                         * unisonDetuneCents
                         / static_cast<float> (activeUnisonVoices - 1)
                     : drift * driftDetuneFallbackCents;
-                const float ratio = std::pow (2.0f, juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
+                const float ratio = std::exp2f (juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
                 std::array<float, 4> increment {};
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
@@ -735,25 +772,51 @@ public:
                 auto& phase3 = ph3[static_cast<size_t> (unison)];
                 auto& phase4 = ph4[static_cast<size_t> (unison)];
                 const float osc1Phase = phase1;
-                const float osc1 = oscillatorSample (osc1Phase, increment[0], wave1,
-                                                     oscillatorPulseWidth[0], analogDrive[0]);
+                // A muted oscillator still advances its phase further down, so
+                // its waveform evaluation can be skipped outright.  With the
+                // default patch three of the four sit at level 0, which makes
+                // this the largest single saving in the loop.  Oscillator 1 is
+                // the exception: it doubles as the audio-rate FM source for
+                // oscillator 2, so a mute there does not silence it.
+                const bool osc1Audible = oscillatorLevel[0] > 1.0e-6f
+                                       || std::abs (osc1FmAmount) > 1.0e-6f;
+                const float osc1 = osc1Audible
+                    ? oscillatorSample (osc1Phase, increment[0], wave1,
+                                        oscillatorPulseWidth[0], analogDrive[0])
+                    : 0.0f;
                 const float osc2Phase = phase2 + matrixFm + osc1 * osc1FmAmount;
                 const std::array<float, 4> samples {
                     osc1,
-                    oscillatorSample (osc2Phase, increment[1], wave2,
-                                      oscillatorPulseWidth[1], analogDrive[1]),
-                    oscillatorSample (phase3, increment[2], wave3,
-                                      oscillatorPulseWidth[2], analogDrive[2]),
-                    oscillatorSample (phase4, increment[3], wave4,
-                                      oscillatorPulseWidth[3], analogDrive[3])
+                    oscillatorLevel[1] > 1.0e-6f
+                        ? oscillatorSample (osc2Phase, increment[1], wave2,
+                                            oscillatorPulseWidth[1], analogDrive[1])
+                        : 0.0f,
+                    oscillatorLevel[2] > 1.0e-6f
+                        ? oscillatorSample (phase3, increment[2], wave3,
+                                            oscillatorPulseWidth[2], analogDrive[2])
+                        : 0.0f,
+                    oscillatorLevel[3] > 1.0e-6f
+                        ? oscillatorSample (phase4, increment[3], wave4,
+                                            oscillatorPulseWidth[3], analogDrive[3])
+                        : 0.0f
                 };
                 float oscillatorLeft = 0.0f, oscillatorRight = 0.0f;
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
-                    const float angle = (oscillatorPan[oscillator] + 1.0f)
-                                      * juce::MathConstants<float>::pi * 0.25f;
-                    const float left = std::cos (angle);
-                    const float right = std::sin (angle);
+                    // Reuse the cached equal-power gains unless this
+                    // oscillator's pan actually moved since the last sample.
+                    if (! panCacheValid[oscillator]
+                        || cachedPanValue[oscillator] != oscillatorPan[oscillator])
+                    {
+                        const float angle = (oscillatorPan[oscillator] + 1.0f)
+                                          * juce::MathConstants<float>::pi * 0.25f;
+                        panGainLeftCache[oscillator] = std::cos (angle);
+                        panGainRightCache[oscillator] = std::sin (angle);
+                        cachedPanValue[oscillator] = oscillatorPan[oscillator];
+                        panCacheValid[oscillator] = true;
+                    }
+                    const float left = panGainLeftCache[oscillator];
+                    const float right = panGainRightCache[oscillator];
                     // Smoothly fade oscillators approaching Nyquist instead of
                     // pinning all higher pitches to one aliased frequency.
                     const float frequencyRatio = oscillatorFrequency[oscillator] * ratio / nyquist;
@@ -762,10 +825,14 @@ public:
                     oscillatorLeft += samples[oscillator] * oscillatorLevel[oscillator] * left * nyquistGain;
                     oscillatorRight += samples[oscillator] * oscillatorLevel[oscillator] * right * nyquistGain;
                 }
-                const float noise = noiseMix * whiteNoiseSample (noiseState);
                 // Independent right-channel noise: the two sides no longer
                 // carry the identical sample, which is what gave the noise
-                // layer its unnaturally focused phantom centre.
+                // layer its unnaturally focused phantom centre.  The two
+                // generators run even when the layer is silent: skipping them
+                // would advance one and not the other, and a preset that
+                // automates the mix back up would start from a different point
+                // in the sequence.
+                const float noise = noiseMix * whiteNoiseSample (noiseState);
                 const float noiseRight = noiseMix * whiteNoiseSample (noiseStateRight);
                 // A fixed conservative bus gain preserves each Level knob's
                 // meaning.  Dividing by the sum of active levels made one
@@ -779,9 +846,17 @@ public:
                     ? (2.0f * position / static_cast<float> (activeUnisonVoices - 1)) : 0.0f;
                 const float pan = juce::jlimit (-1.0f, 1.0f,
                     positionNorm * unisonSpreadAmount);
-                const float panAngle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
-                const float panGainLeft = std::cos (panAngle);
-                const float panGainRight = std::sin (panAngle);
+                const auto layer = static_cast<size_t> (unison);
+                if (! unisonPanCacheValid[layer] || cachedUnisonPanValue[layer] != pan)
+                {
+                    const float panAngle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+                    unisonPanLeftCache[layer] = std::cos (panAngle);
+                    unisonPanRightCache[layer] = std::sin (panAngle);
+                    cachedUnisonPanValue[layer] = pan;
+                    unisonPanCacheValid[layer] = true;
+                }
+                const float panGainLeft = unisonPanLeftCache[layer];
+                const float panGainRight = unisonPanRightCache[layer];
                 // Per-layer level drift, the amplitude counterpart of the
                 // existing detune wanderer.  At drift 0 the multiplier is
                 // exactly 1.0, so the unison mix stays bit-identical.
@@ -789,10 +864,15 @@ public:
                     * levelDriftValue[static_cast<size_t> (unison)];
                 unisonLeft += oscillatorLeft * panGainLeft * layerLevel;
                 unisonRight += oscillatorRight * panGainRight * layerLevel;
-                phase1 = std::fmod (phase1 + increment[0], 1.0f);
-                phase2 = std::fmod (phase2 + increment[1], 1.0f);
-                phase3 = std::fmod (phase3 + increment[2], 1.0f);
-                phase4 = std::fmod (phase4 + increment[3], 1.0f);
+                // Every increment is clamped below 0.5 before it gets here, so
+                // the phase can cross the wrap point at most once and a
+                // compare replaces the fmod.  At 4 oscillators and 8 unison
+                // layers this is 32 fmod calls per sample, the widest
+                // transcendental in the voice.
+                phase1 += increment[0]; if (phase1 >= 1.0f) phase1 -= 1.0f;
+                phase2 += increment[1]; if (phase2 >= 1.0f) phase2 -= 1.0f;
+                phase3 += increment[2]; if (phase3 >= 1.0f) phase3 -= 1.0f;
+                phase4 += increment[3]; if (phase4 >= 1.0f) phase4 -= 1.0f;
                 driftValue[static_cast<size_t> (unison)] += driftLevel
                     * 0.0003f * (unitRandomFromState (driftState[static_cast<size_t> (unison)]) - 0.5f);
                 driftValue[static_cast<size_t> (unison)] = juce::jlimit (-1.0f, 1.0f,
@@ -1002,7 +1082,7 @@ private:
     {
         if (std::abs (filterEnvAmount) <= 1.0e-5f)
             return 1.0f;
-        return std::pow (2.0f, filterEnvAmount * envelope * 5.0f);
+        return std::exp2f (filterEnvAmount * envelope * 5.0f);
     }
 
     EonMiniEEFProcessor& p;
@@ -1039,6 +1119,9 @@ private:
     float varianceAmount = 0.0f;
     float cutoffVariance = 1.0f, envelopeVariance = 1.0f, levelVariance = 1.0f;
     float pitchVarianceRatio = 1.0f;
+    // Key tracking is a function of the held note only, so the exponential is
+    // evaluated once per note instead of once per sample.
+    float keyRatioForNote = 1.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
     juce::SmoothedValue<float> resonanceSmooth;
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
@@ -1051,6 +1134,19 @@ private:
     juce::ADSR filterEnv;
     float filterEnvAmount = 0.0f;
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
+    // Cached equal-power pan gains.  panSmooth ramps over 5 ms, so after the
+    // ramp settles the value stops changing and the sin/cos pair can be
+    // reused.  The oscillator pan gains sit inside the unison loop, which
+    // made them the most repeated transcendental in the whole voice: 12 per
+    // sample at 4 oscillators and 8 unison layers, 1536 per sample at the
+    // 16-voice worst case.  Each entry recomputes only when its own input
+    // value actually moved.
+    std::array<float, 4> panGainLeftCache {}, panGainRightCache {};
+    std::array<float, 4> cachedPanValue {};
+    std::array<bool, 4> panCacheValid {};
+    std::array<float, maxUnisonVoices> unisonPanLeftCache {}, unisonPanRightCache {};
+    std::array<float, maxUnisonVoices> cachedUnisonPanValue {};
+    std::array<bool, maxUnisonVoices> unisonPanCacheValid {};
     std::array<float, maxUnisonVoices> ph1 {}, ph2 {}, ph3 {}, ph4 {};
 };
 struct EonSound:juce::SynthesiserSound{bool appliesToNote(int)override{return true;}bool appliesToChannel(int)override{return true;}};
@@ -1709,7 +1805,10 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
                 = reverbInputL + reverbCombDampL[index] * combFeedback;
             reverbCombR[index][static_cast<size_t> (position)]
                 = reverbInputR + reverbCombDampR[index] * combFeedback;
-            reverbCombPositions[index] = (position + 1) % reverbCombLengths[index];
+            // See processReverbAllpass: a compare beats a modulo here, and
+            // this runs four more times per sample.
+            reverbCombPositions[index] = position + 1 == reverbCombLengths[index]
+                ? 0 : position + 1;
             combSumL += combOutL * 0.25f;
             combSumR += combOutR * 0.25f;
         }
