@@ -182,6 +182,31 @@ void setVoiceVariance (EonMiniEEFProcessor& probe, float amount)
         parameter->setValueNotifyingHost (parameter->convertTo0to1 (amount));
 }
 
+// P3 probe controls: reverb comb modulation and delay stereo width.
+void setReverbTexture (EonMiniEEFProcessor& probe, float reverbModulationAmount)
+{
+    const auto setPlain = [&probe] (const char* id, float plainValue)
+    {
+        if (auto* parameter = probe.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+    setPlain (ParamIDs::reverbMix, 1.0f);
+    setPlain (ParamIDs::reverbModulation, reverbModulationAmount);
+}
+
+void setDelayStereo (EonMiniEEFProcessor& probe, float width)
+{
+    const auto setPlain = [&probe] (const char* id, float plainValue)
+    {
+        if (auto* parameter = probe.apvts.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+    };
+    setPlain (ParamIDs::fxWet, 1.0f);
+    setPlain (ParamIDs::delayTime, 0.25f);
+    setPlain (ParamIDs::delayFeedback, 0.0f);
+    setPlain (ParamIDs::delayStereo, width);
+}
+
 // Renders the same held note twice, once per output channel, so the noise
 // layer's stereo decorrelation can be measured as an inter-channel
 // difference.  A mono noise source reads zero here; independent seeds do not.
@@ -204,6 +229,36 @@ void renderStereoWindow (EonMiniEEFProcessor& probe,
             {
                 left[(size_t) (absoluteSample - analysisStart)] = buffer.getSample (0, sample);
                 right[(size_t) (absoluteSample - analysisStart)] = buffer.getSample (1, sample);
+            }
+        }
+    }
+}
+
+// P3 probe: renders a note, releases it, and captures the stereo tail so the
+// reverb and delay can be measured on their own.  A long release keeps the
+// source alive across the delay so the window measures the repeats.
+template <size_t Capacity>
+void renderFxTail (EonMiniEEFProcessor& probe, int noteOffSample,
+                   std::array<float, Capacity>& left,
+                   std::array<float, Capacity>& right)
+{
+    probe.prepareToPlay (probeSampleRate, probeBlockSize);
+    for (int blockStart = 0; blockStart < droneTotalSamples; blockStart += probeBlockSize)
+    {
+        juce::AudioBuffer<float> buffer (2, probeBlockSize);
+        juce::MidiBuffer midi;
+        if (blockStart == 0)
+            midi.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100), 0);
+        if (noteOffSample >= blockStart && noteOffSample < blockStart + probeBlockSize)
+            midi.addEvent (juce::MidiMessage::noteOff (1, 36), noteOffSample - blockStart);
+        probe.processBlock (buffer, midi);
+        for (int sample = 0; sample < probeBlockSize; ++sample)
+        {
+            const int absoluteSample = blockStart + sample;
+            if (absoluteSample >= 0 && absoluteSample < static_cast<int> (Capacity))
+            {
+                left[static_cast<size_t> (absoluteSample)] = buffer.getSample (0, sample);
+                right[static_cast<size_t> (absoluteSample)] = buffer.getSample (1, sample);
             }
         }
     }
@@ -822,11 +877,153 @@ int main()
     const bool noiseStereoDecorrelated
         = noiseChannelDifference[0] == 0.0 && noiseChannelDifference[1] > 1.0e-6;
 
+    // P3 probe helpers shared by the reverb and delay cases: one tail
+    // renderer, a summed RMS over both channels, and a per-channel peak
+    // position finder.
+    constexpr int fxTailNoteOff = 4096;
+    const auto configureTailProbe = [] (EonMiniEEFProcessor& probe)
+    {
+        const auto setPlain = [&probe] (const char* id, float plainValue)
+        {
+            if (auto* parameter = probe.apvts.getParameter (id))
+                parameter->setValueNotifyingHost (parameter->convertTo0to1 (plainValue));
+        };
+        if (! configureSineProbe (probe, 0.0f))
+            return false;
+        setPlain (ParamIDs::attack, 0.001f);
+        setPlain (ParamIDs::decay, 0.001f);
+        setPlain (ParamIDs::sustain, 1.0f);
+        setPlain (ParamIDs::release, 0.5f);
+        setOversamplingMode (probe, 0);
+        return true;
+    };
+    const auto summedRms = [] (const std::array<float, analysisLength>& left,
+                               const std::array<float, analysisLength>& right,
+                               int start, int length)
+    {
+        double sum = 0.0;
+        const int first = juce::jmax (0, start);
+        const int last = juce::jmin (static_cast<int> (left.size()), start + length);
+        for (int index = first; index < last; ++index)
+        {
+            const double value = (double) left[static_cast<size_t> (index)]
+                               + (double) right[static_cast<size_t> (index)];
+            sum += value * value;
+        }
+        return std::sqrt (sum / (double) juce::jmax (1, last - first));
+    };
+    const auto peakOffset = [] (const std::array<float, analysisLength>& window,
+                                int start, int length)
+    {
+        int best = start;
+        double bestValue = 0.0;
+        const int last = juce::jmin (static_cast<int> (window.size()), start + length);
+        for (int index = juce::jmax (0, start); index < last; ++index)
+        {
+            const double value = std::abs ((double) window[static_cast<size_t> (index)]);
+            if (value > bestValue) { bestValue = value; best = index; }
+        }
+        return best;
+    };
+
+
+    struct ReverbReport { double early = 0.0, late = 0.0, repeatDifference = 0.0; };
+    std::array<ReverbReport, 2> reverbReports {};
+    std::cout << "| reverbModulation | tail early | tail late | repeat diff |\n|---|---|---|---|\n";
+    for (size_t index = 0; index < 2; ++index)
+    {
+        const float amount = index == 0 ? 0.0f : 1.0f;
+        EonMiniEEFProcessor probe, repeatProbe;
+        if (! configureTailProbe (probe) || ! configureTailProbe (repeatProbe))
+        {
+            std::cerr << "reverb probe could not configure the sine voice\n";
+            return 1;
+        }
+        setReverbTexture (probe, amount);
+        setReverbTexture (repeatProbe, amount);
+        std::array<float, analysisLength> left {}, right {}, repeatLeft {}, repeatRight {};
+        renderFxTail (probe, fxTailNoteOff, left, right);
+        renderFxTail (repeatProbe, fxTailNoteOff, repeatLeft, repeatRight);
+        bool finite = true;
+        for (const float sample : left)
+            finite = finite && std::isfinite (sample);
+        if (! finite)
+        {
+            std::cerr << "reverb probe produced non-finite output\n";
+            return 1;
+        }
+        auto& report = reverbReports[index];
+        report.early = summedRms (left, right, fxTailNoteOff + 4096, 2048);
+        report.late = summedRms (left, right, analysisLength - 4096, 2048);
+        double difference = 0.0, peak = 0.0;
+        for (size_t sample = 0; sample < left.size(); ++sample)
+        {
+            difference = juce::jmax (difference,
+                                     std::abs ((double) left[sample] - (double) repeatLeft[sample]));
+            peak = juce::jmax (peak, std::abs ((double) left[sample]));
+        }
+        report.repeatDifference = difference / juce::jmax (1.0e-9, peak);
+        std::cout << "| " << amount
+                  << " | " << report.early
+                  << " | " << report.late
+                  << " | " << report.repeatDifference << " |\n";
+    }
+
+    constexpr int delayWindowStart = fxTailNoteOff + 16384;
+    std::array<double, 2> delayWetLevel {};
+    std::array<int, 2> delayLeftPeak {}, delayRightPeak {};
+    std::array<double, 2> delayChannelDifference {};
+    std::cout << "| delayStereo | wet rms | L peak | R peak | L-R rms |\n|---|---|---|---|---|\n";
+    for (size_t index = 0; index < 2; ++index)
+    {
+        const float width = index == 0 ? 0.0f : 1.0f;
+        EonMiniEEFProcessor probe;
+        if (! configureTailProbe (probe))
+        {
+            std::cerr << "delay probe could not configure the sine voice\n";
+            return 1;
+        }
+        setDelayStereo (probe, width);
+        std::array<float, analysisLength> left {}, right {};
+        renderFxTail (probe, fxTailNoteOff, left, right);
+        delayWetLevel[index] = summedRms (left, right, delayWindowStart, 2048);
+        delayLeftPeak[index] = peakOffset (left, delayWindowStart, 2048);
+        delayRightPeak[index] = peakOffset (right, delayWindowStart, 2048);
+        double sum = 0.0;
+        for (size_t sample = 0; sample < left.size(); ++sample)
+        {
+            const double difference = (double) left[sample] - (double) right[sample];
+            sum += difference * difference;
+        }
+        delayChannelDifference[index] = std::sqrt (sum / (double) left.size());
+        std::cout << "| " << width
+                  << " | " << delayWetLevel[index]
+                  << " | " << delayLeftPeak[index] - delayWindowStart
+                  << " | " << delayRightPeak[index] - delayWindowStart
+                  << " | " << delayChannelDifference[index] << " |\n";
+    }
+
     // Aliasing is not gated here: a single sine into tanh() at these levels
     // keeps the 15th+ fold lines below the window-leakage floor, so a
     // fold-line ratio would compare floor noise. The deep-clip pulse drone
     // regression in PresetSmoke (runOversampledDriveAliasingRegression) owns
     // alias gating; this probe owns the harmonic/THD baseline.
+    const bool reverbModulationDeterministic = reverbReports[0].repeatDifference == 0.0
+                                            && reverbReports[1].repeatDifference == 0.0;
+    const bool reverbModulationChangesTail = std::abs (reverbReports[1].early
+                                                      - reverbReports[0].early) > 1.0e-6;
+    // A mono voice writes the same sample into both delay lines, so the two
+    // output channels stay sample-identical at every width: the inter-channel
+    // difference is correctly zero and a non-zero reading would mean the probe
+    // had stopped measuring what it claims to.  What the width control changes
+    // is when each side taps, which shows up as a shift in the left channel's
+    // own repeat position relative to the width-0 render.
+    const bool delayStereoSpreads = delayWetLevel[0] > 1.0e-5
+                                 && delayWetLevel[1] > 1.0e-5
+                                 && delayChannelDifference[0] == 0.0
+                                 && delayChannelDifference[1] == 0.0
+                                 && delayLeftPeak[0] != delayLeftPeak[1];
+
     std::cout << "cleanSine=" << (cleanSine ? "PASS" : "FAIL")
               << " driveAddsHarmonics=" << (driveAddsHarmonics ? "PASS" : "FAIL")
               << " dcControlled=" << (dcControlled ? "PASS" : "FAIL")
@@ -846,6 +1043,9 @@ int main()
               << " voiceVarianceDeterministic=" << (voiceVarianceDeterministic ? "PASS" : "FAIL")
               << " voiceVarianceAudible=" << (voiceVarianceAudible ? "PASS" : "FAIL")
               << " noiseStereoDecorrelated=" << (noiseStereoDecorrelated ? "PASS" : "FAIL")
+              << " reverbModulationDeterministic=" << (reverbModulationDeterministic ? "PASS" : "FAIL")
+              << " reverbModulationChangesTail=" << (reverbModulationChangesTail ? "PASS" : "FAIL")
+              << " delayStereoSpreads=" << (delayStereoSpreads ? "PASS" : "FAIL")
               << " (alias gating owned by PresetSmoke regression)\n";
 
     if (! cleanSine || ! driveAddsHarmonics || ! dcControlled
@@ -856,7 +1056,9 @@ int main()
         || ! filterEnvSweepsCutoff || ! filterEnvAmountOffStatic
         || ! pwmDestinationWorks
         || ! voiceVarianceDeterministic || ! voiceVarianceAudible
-        || ! noiseStereoDecorrelated)
+        || ! noiseStereoDecorrelated
+        || ! reverbModulationDeterministic || ! reverbModulationChangesTail
+        || ! delayStereoSpreads)
     {
         std::cerr << "THD drive baseline gate failed\n";
         return 1;
