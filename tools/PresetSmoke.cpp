@@ -319,6 +319,96 @@ int runFactoryPresetContractRegression()
         }
     }
 
+    // The default wave is Analog (index 4), and the thirteen factory patches
+    // that predate it pin Saw (index 0) on every oscillator they leave
+    // unspecified, so their sound does not move when the default changes.
+    // This is the contract that keeps the bank stable, so it is asserted here
+    // rather than left to a comment.  Pinning only osc1 was not enough: a
+    // patch that sets osc4 to Square still inherited Analog on osc2 and osc3,
+    // which moved six of the preset renders byte-for-byte.
+    const juce::StringArray expectedWaves {
+        "Saw", "Square", "Triangle", "Sine", "Analog"
+    };
+    // AudioParameterChoice keeps its default private, so the default is read
+    // the same way the reset contract already proves it: apply Init, which is
+    // reset() plus no overrides, and look at the resulting value.  For a choice
+    // parameter getRawParameterValue() hands back the plain choice index, not a
+    // normalised 0..1, so Analog is the literal 4.
+    EonMiniEEFProcessor defaultWaveProbe;
+    FactoryPresets::apply (defaultWaveProbe, 0);
+    constexpr std::array<const char*, 4> waveIds {
+        ParamIDs::osc1Wave, ParamIDs::osc2Wave, ParamIDs::osc3Wave, ParamIDs::osc4Wave
+    };
+    for (const auto* waveId : waveIds)
+    {
+        auto* wave = dynamic_cast<juce::AudioParameterChoice*> (
+            removalProbe.apvts.getParameter (waveId));
+        if (wave == nullptr || wave->choices != expectedWaves)
+        {
+            std::cerr << waveId << " wave list does not match the expected choices\n";
+            ++failures;
+            continue;
+        }
+        const auto* waveValue = defaultWaveProbe.apvts.getRawParameterValue (waveId);
+        if (waveValue == nullptr || std::abs (waveValue->load() - 4.0f) > 1.0e-6f)
+        {
+            std::cerr << waveId << " default is not Analog (index 4, got "
+                      << (waveValue ? waveValue->load() : -1.0f) << ")\n";
+            ++failures;
+        }
+    }
+
+    // Every patch except Init must pin every oscillator it cares about, because
+    // the default now differs from the saw these patches were written against.
+            // The value itself may be Saw, Square or anything but Analog: what
+            // must not happen is an oscillator silently inheriting the new
+            // default.  getRawParameterValue() gives the plain choice index for
+            // a choice parameter, so Analog reads as the literal 4.
+    constexpr std::array<int, 16> pinnedPatches {
+        1, 2, 3, 4, 5, 7, 8, 10, 12, 14, 15, 17, 18, 21, 22, 23
+    };
+    for (const int index : pinnedPatches)
+    {
+        EonMiniEEFProcessor patchProbe;
+        FactoryPresets::apply (patchProbe, index);
+        for (const auto* waveId : waveIds)
+        {
+            // An oscillator at level 0 is silent, so which wave it names cannot
+            // be heard and does not need a pin.  Note that osc2's default
+            // level is 0.5, not 0, so a patch that never mentions osc2 is
+            // still making sound with it.
+            const juce::String levelId = juce::String (waveId).replace ("Wave", "Level");
+            const std::string levelIdUtf8 = levelId.toStdString();
+            const auto* levelValue = patchProbe.apvts.getRawParameterValue (levelIdUtf8.c_str());
+            if (levelValue != nullptr && levelValue->load() <= 1.0e-6f)
+                continue;
+            const auto* waveValue = patchProbe.apvts.getRawParameterValue (waveId);
+            if (waveValue == nullptr)
+            {
+                std::cerr << FactoryPresets::names()[index] << " has no " << waveId << '\n';
+                ++failures;
+            }
+            else if (waveValue->load() > 3.5f)
+            {
+                std::cerr << FactoryPresets::names()[index] << " inherits the Analog default on "
+                          << waveId << "\n";
+                ++failures;
+            }
+        }
+    }
+
+    // Init inherits the default, so it must land on Analog.
+    {
+        EonMiniEEFProcessor initProbe;
+        FactoryPresets::apply (initProbe, 0);
+        const auto* wave = initProbe.apvts.getRawParameterValue (ParamIDs::osc1Wave);
+        if (wave == nullptr || std::abs (wave->load() - 4.0f) > 1.0e-6f)
+        {
+            std::cerr << "Init should inherit the Analog default\n";
+            ++failures;
+        }
+    }
+
     return failures;
 }
 

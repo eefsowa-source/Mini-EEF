@@ -60,6 +60,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 1:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
             set (ParamIDs::osc4Wave, 1.0f);
             set (ParamIDs::osc3Level, 0.52f);
             set (ParamIDs::osc4Level, 0.18f);
@@ -99,6 +104,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 2:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc3Level, 0.22f);
             set (ParamIDs::osc2Coarse, 0.0f);
@@ -134,6 +144,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 3:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc3Wave, 1.0f);
             set (ParamIDs::osc3Level, 0.14f);
             set (ParamIDs::osc2Coarse, 0.0f);
@@ -172,6 +187,10 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 4:
+
+            // osc2 carries this patch at its default level; without a pin it
+            // would inherit the new Analog default and move.
+            set (ParamIDs::osc2Wave, 0.0f);
             set (ParamIDs::osc1Wave, 1.0f);
             set (ParamIDs::osc3Wave, 3.0f);
             set (ParamIDs::osc3Level, 0.65f);
@@ -203,6 +222,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 5:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc3Level, 0.16f);
             set (ParamIDs::noiseMix, 0.012f);
@@ -273,6 +297,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 7:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Fine, -7.0f);
             set (ParamIDs::osc3Wave, 3.0f);
             set (ParamIDs::osc3Level, 0.22f);
@@ -302,6 +331,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 8:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc3Wave, 0.0f);
             set (ParamIDs::osc3Level, 0.18f);
             set (ParamIDs::osc3Coarse, 12.0f);
@@ -362,6 +396,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 10:
+
+            // osc2/3 carries this patch at its default level; without a pin it
+            // would inherit the new Analog default and move.
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
             set (ParamIDs::osc1Wave, 1.0f);
             set (ParamIDs::osc2Coarse, 7.0f);
             set (ParamIDs::osc3Level, 0.12f);
@@ -438,6 +477,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 12:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc2Fine, -8.0f);
             set (ParamIDs::osc3Level, 0.22f);
@@ -500,6 +544,10 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 14:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc2Fine, -7.0f);
             set (ParamIDs::osc3Level, 0.18f);
@@ -540,6 +588,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 15:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 2.0f);
             set (ParamIDs::osc2Level, 0.34f);
             set (ParamIDs::osc2Coarse, 7.0f);
@@ -611,6 +664,10 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 17:
+
+            // osc2 carries this patch at level 0.38; without a pin it would
+            // inherit the new Analog default and move.
+            set (ParamIDs::osc2Wave, 0.0f);
             set (ParamIDs::osc1Wave, 1.0f);
             set (ParamIDs::osc2Level, 0.38f);
             set (ParamIDs::osc2Coarse, 7.0f);
@@ -648,6 +705,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 18:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc3Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc2Fine, 5.0f);
             set (ParamIDs::osc3Level, 0.10f);
@@ -747,6 +809,10 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 21:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc2Fine, -4.0f);
             set (ParamIDs::osc3Wave, 3.0f);
@@ -783,6 +849,11 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 22:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
+            set (ParamIDs::osc2Wave, 0.0f);
+            set (ParamIDs::osc4Wave, 0.0f);
             set (ParamIDs::osc2Level, 0.42f);
             set (ParamIDs::osc2Coarse, 12.0f);
             set (ParamIDs::osc3Wave, 1.0f);
@@ -812,6 +883,9 @@ void apply (EonMiniEEFProcessor& processor, int presetIndex)
             break;
 
         case 23:
+
+            // The default wave is Analog; this patch predates it and pins Saw.
+            set (ParamIDs::osc1Wave, 0.0f);
             set (ParamIDs::osc2Wave, 1.0f);
             set (ParamIDs::osc2Level, 0.40f);
             set (ParamIDs::osc2Coarse, -12.0f);

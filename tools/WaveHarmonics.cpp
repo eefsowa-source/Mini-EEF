@@ -37,7 +37,9 @@ constexpr int harmonicCount = 12;
 // harmonics under Nyquist at 48 kHz with room for the Blackman skirt.
 constexpr std::array<int, 3> probeNotes { 57, 69, 81 };
 
-constexpr std::array<const char*, 4> waveNames { "saw", "square50", "triangle", "sine" };
+constexpr std::array<const char*, 5> waveNames {
+    "saw", "square50", "triangle", "sine", "analog"
+};
 
 double midiToHz (int midiNote)
 {
@@ -170,11 +172,11 @@ int main()
     std::cout << "| wave | width | quality | note | hz | H2 | H3 | H4 | H5 | H6 | H7 | H8 |\n";
     std::cout << "|---|---|---|---|---|---|---|---|---|---|---|---|\n";
 
-    std::array<WaveReport, 4> a4Reports {};
-    std::array<WaveReport, 4> a4Repeat {};
+    std::array<WaveReport, 5> a4Reports {};
+    std::array<WaveReport, 5> a4Repeat {};
     bool anyNonFinite = false;
 
-    for (int wave = 0; wave < 4; ++wave)
+    for (int wave = 0; wave < 5; ++wave)
     {
         // The square is swept across the pulse-width range.  A symmetric width
         // must have no even harmonics; an asymmetric one legitimately grows
@@ -194,7 +196,7 @@ int main()
                     std::cerr << "Could not configure the " << waveNames[(size_t) wave] << " probe\n";
                     return 1;
                 }
-                if (wave == 1)
+                if (wave == 1 || wave == 4)
                     setPlain (probe, ParamIDs::osc1PulseWidth, width);
                 setOversamplingMode (probe, mode == 0 ? 0 : 2);
                 const auto window = renderWaveWindow (probe, note);
@@ -225,7 +227,7 @@ int main()
     // no audible or measurable energy, and treating that as a regression would
     // be measuring the floor rather than the oscillator.
     double maxQualityDifference = 0.0;
-    for (int wave = 0; wave < 4; ++wave)
+    for (int wave = 0; wave < 5; ++wave)
         for (int harmonic = 0; harmonic < harmonicCount; ++harmonic)
         {
             const double level = a4Reports[(size_t) wave].harmonicDb[(size_t) harmonic];
