@@ -806,7 +806,7 @@ public:
                     // A muted oscillator contributed only a zero sample, so the
                     // mix can skip its pan lookup and Nyquist fade entirely.
                     if (oscillatorLevel[oscillator] <= 1.0e-6f
-                        && !(oscillator == 0 && std::abs (osc1FmAmount) > 1.0e-6f))
+                        && !(oscillator == 0 && osc1Audible))
                         continue;
                     // Reuse the cached equal-power gains unless this
                     // oscillator's pan actually moved since the last sample.
@@ -1559,9 +1559,13 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
     const bool needsRead = compensation != 0;
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
-        int readPosition = latencyWritePosition - compensation;
-        if (readPosition < 0)
-            readPosition += latencyBufferCapacity;
+        int readPosition = 0;
+        if (needsRead)
+        {
+            readPosition = latencyWritePosition - compensation;
+            if (readPosition < 0)
+                readPosition += latencyBufferCapacity;
+        }
         for (int channel = 0; channel < latencyChannels; ++channel)
         {
             auto& line = latencyBuffer[static_cast<size_t> (channel)];
