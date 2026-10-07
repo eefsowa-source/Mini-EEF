@@ -141,6 +141,13 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     noiseMixAttachment=bind(noiseMix,ParamIDs::noiseMix,"NOISE"); amDepthAttachment=bind(amDepth,ParamIDs::amDepth,"AM DEPTH"); unisonVoicesAttachment=bind(unisonVoices,ParamIDs::unisonVoices,"UNISON"); unisonDetuneAttachment=bind(unisonDetune,ParamIDs::unisonDetune,"DETUNE"); unisonSpreadAttachment=bind(unisonSpread,ParamIDs::unisonSpread,"SPREAD"); unisonPhaseAttachment=bind(unisonPhase,ParamIDs::unisonPhase,"UNI PHASE"); unisonDriftAttachment=bind(unisonDrift,ParamIDs::unisonDrift,"DRIFT"); voiceVarianceAttachment=bind(voiceVariance,ParamIDs::voiceVariance,"VOICE VAR"); attackAttachment=bind(attack,ParamIDs::attack,"ATTACK"); decayAttachment=bind(decay,ParamIDs::decay,"DECAY"); sustainAttachment=bind(sustain,ParamIDs::sustain,"SUSTAIN"); releaseAttachment=bind(release,ParamIDs::release,"RELEASE"); envCurveAttachment=bind(envCurve,ParamIDs::envCurve,"ENV CRV"); cutoffAttachment=bind(cutoff,ParamIDs::cutoff,"CUTOFF",EonAnalogLookAndFeel::compact); resonanceAttachment=bind(resonance,ParamIDs::resonance,"RESO",EonAnalogLookAndFeel::compact); filterDriveAttachment=bind(filterDrive,ParamIDs::filterDrive,"FLT DRV",EonAnalogLookAndFeel::compact); gainAttachment=bind(gain,ParamIDs::gain,"OUTPUT",EonAnalogLookAndFeel::compact); driveAttachment=bind(drive,ParamIDs::drive,"DRIVE",EonAnalogLookAndFeel::compact); ampSatAttachment=bind(ampSaturation,ParamIDs::ampSat,"SAT",EonAnalogLookAndFeel::compact);
     constexpr auto primary = EonAnalogLookAndFeel::primary;
     lfoRateAttachment=bind(lfoRate,ParamIDs::lfoRate,"LFO RATE",primary); lfoDepthAttachment=bind(lfoDepth,ParamIDs::lfoDepth,"LFO CUTOFF",primary); lfoPitchAttachment=bind(lfoPitch,ParamIDs::lfoPitch,"LFO PITCH",primary); velocityAttachment=bind(velocityAmount,ParamIDs::velocityAmount,"VELOCITY",primary);
+    for (int slot = 0; slot < 4; ++slot)
+    {
+        modAmountAttachment[static_cast<size_t> (slot)] = bind (
+            modAmount[static_cast<size_t> (slot)], ParamIDs::modAmount (slot),
+            "AMT " + juce::String (slot + 1), EonAnalogLookAndFeel::compact);
+        modAmount[static_cast<size_t> (slot)].getProperties().set ("eon.raised", true);
+    }
     filterAttackAttachment=bind(filterAttack,ParamIDs::filterAttack,"F ATK"); filterDecayAttachment=bind(filterDecay,ParamIDs::filterDecay,"F DEC"); filterSustainAttachment=bind(filterSustain,ParamIDs::filterSustain,"F SUS"); filterReleaseAttachment=bind(filterRelease,ParamIDs::filterRelease,"F REL"); filterEnvAmountAttachment=bind(filterEnvAmount,ParamIDs::filterEnvAmount,"F AMT");
     fxWetAttachment=bind(fxWet,ParamIDs::fxWet,"FX WET"); delayTimeAttachment=bind(delayTime,ParamIDs::delayTime,"DLY TIME"); delayFeedbackAttachment=bind(delayFeedback,ParamIDs::delayFeedback,"DLY FDBK"); delayStereoAttachment=bind(delayStereo,ParamIDs::delayStereo,"DLY WIDE"); chorusDepthAttachment=bind(chorusDepth,ParamIDs::chorusDepth,"CHO DEPTH"); chorusRateAttachment=bind(chorusRate,ParamIDs::chorusRate,"CHO RATE"); chorusMixAttachment=bind(chorusMix,ParamIDs::chorusMix,"CHO MIX"); reverbMixAttachment=bind(reverbMix,ParamIDs::reverbMix,"REVERB"); reverbModulationAttachment=bind(reverbModulation,ParamIDs::reverbModulation,"RVB MOD");
     // Keep every physical control visible, but never shrink the panel into the
@@ -533,6 +540,14 @@ void EonMiniEEFEditor::resized()
     x = modX; const int modKnobW = juce::jmax (52, (modW - 24) / 4);
     const int modKnobH = juce::jmin (primaryH, lowerH - 54);
     for (auto* s : { &lfoRate, &lfoDepth, &lfoPitch, &velocityAmount }) { s->setBounds (x, lowerY + 45, modKnobW, modKnobH); x += modKnobW + 8; }
+    const int modAmountY = lowerY + 45 + modKnobH + 2;
+    const int modAmountH = juce::jmin (compactH, lowerH - (modAmountY - lowerY) - 4);
+    x = modX;
+    for (auto& amount : modAmount)
+    {
+        amount.setBounds (x, modAmountY, modKnobW, modAmountH);
+        x += modKnobW + 8;
+    }
     // The shape selector belongs in the panel's empty title row, to the right
     // of the caption.  At the panel's left corner it covered the caption text
     // and made the title unreadable.

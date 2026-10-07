@@ -243,6 +243,27 @@ public:
                                       juce::Colour (0xFFCCC0A6), capInset.getRight(), capInset.getBottom(), false);
         g.setGradientFill (capCore);
         g.fillEllipse (capInset);
+        // Modulation amounts opt into a domed cap.  The highlight and the
+        // terminator stay inside the face, so the row height does not change.
+        if (slider.getProperties().getWithDefault ("eon.raised", false))
+        {
+            const auto dome = capInset.reduced (radius * 0.16f);
+            juce::ColourGradient domeLight (juce::Colour (0xFFFFF6E4).withAlpha (0.55f),
+                                            dome.getX(), dome.getY(),
+                                            juce::Colour (0xFF8C7350).withAlpha (0.0f),
+                                            dome.getRight(), dome.getBottom(), true);
+            g.setGradientFill (domeLight);
+            g.fillEllipse (dome);
+            g.setColour (juce::Colours::black.withAlpha (0.18f));
+            juce::Path terminator;
+            terminator.addCentredArc (capInset.getCentreX(), capInset.getCentreY(),
+                                       capInset.getWidth() * 0.42f, capInset.getHeight() * 0.42f,
+                                       0.0f,
+                                       0.15f * juce::MathConstants<float>::pi,
+                                       0.85f * juce::MathConstants<float>::pi, true);
+            g.strokePath (terminator, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
+                                                            juce::PathStrokeType::rounded));
+        }
         // Specular bloom on the lit shoulder, and a terminator on the dark one.
         const auto drawShoulderArc = [&g] (const juce::Rectangle<float>& bounds,
                                           float startAngle, float endAngle,
@@ -338,6 +359,7 @@ private:
     std::array<juce::Slider, 4> oscLevel, oscCoarse, oscFine, oscPhase, oscPan, oscPulseWidth;
     juce::Slider noiseMix, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, voiceVariance, attack, decay, sustain, release, envCurve, filterAttack, filterDecay, filterSustain, filterRelease, filterEnvAmount, cutoff, resonance, filterDrive, gain, drive, ampSaturation;
     juce::Slider lfoRate, lfoDepth, lfoPitch, velocityAmount;
+    std::array<juce::Slider, 4> modAmount;
     juce::Slider fxWet, delayTime, delayFeedback, delayStereo, chorusDepth, chorusRate, chorusMix, reverbMix, reverbModulation;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> osc1Attachment, osc2Attachment, osc3Attachment, osc4Attachment, modeAttachment, filterModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> oversamplingAttachment;
@@ -347,6 +369,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, voiceVarianceAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, envCurveAttachment, cutoffAttachment, resonanceAttachment, filterDriveAttachment, gainAttachment, driveAttachment, ampSatAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filterAttackAttachment, filterDecayAttachment, filterSustainAttachment, filterReleaseAttachment, filterEnvAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoDepthAttachment, lfoPitchAttachment, velocityAttachment;
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 4> modAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxWetAttachment, delayTimeAttachment, delayFeedbackAttachment, delayStereoAttachment, chorusDepthAttachment, chorusRateAttachment, chorusMixAttachment, reverbMixAttachment, reverbModulationAttachment;
     float meterLeft = 0.0f, meterRight = 0.0f;
     // Cached wood cabinet: the grain needs hundreds of thin strokes to read
