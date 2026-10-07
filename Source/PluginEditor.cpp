@@ -205,8 +205,8 @@ void EonMiniEEFEditor::knob(juce::Slider& s, const juce::String& name,
     // The custom renderer engraves the parameter name at rest and swaps it
     // for the exact value only while a deliberate gesture is in progress.
     s.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    s.onDragStart = [&s] { s.getProperties().set ("eon.dragging", true); s.repaint(); };
-    s.onDragEnd = [&s] { s.getProperties().set ("eon.dragging", false); s.repaint(); };
+    s.onDragStart = [this, &s] { s.getProperties().set ("eon.dragging", true); knobCaptionRefresh.trigger (s); };
+    s.onDragEnd = [this, &s] { s.getProperties().set ("eon.dragging", false); knobCaptionRefresh.trigger (s); };
     s.setColour (juce::Slider::rotarySliderFillColourId, mint);
     s.setColour (juce::Slider::rotarySliderOutlineColourId, edge);
     s.setColour (juce::Slider::thumbColourId, ivory);

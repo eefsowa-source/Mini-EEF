@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "UI/CoalescedRepaint.h"
 
 // A hardware-style control layer: compact engraved typography, a powder-coated
 // chassis and physically layered knobs make fast sound shaping possible
@@ -359,5 +360,8 @@ private:
     // Cached wood cabinet: the grain needs hundreds of thin strokes to read
     // as wood, so it is rasterised on resize instead of every paint().
     juce::Image woodCache;
+    // Declared after the sliders so it is destroyed first and cannot repaint
+    // a control that has already gone.
+    CoalescedRepaint knobCaptionRefresh;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EonMiniEEFEditor)
 };
