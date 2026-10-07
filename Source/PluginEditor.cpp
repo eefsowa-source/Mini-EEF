@@ -24,22 +24,27 @@ const juce::Colour brass    (0xffc9a15c);
 const juce::Colour cream    (0xfff2e7d2);
 constexpr int headerY = 9;
 constexpr int headerHeight = 78;
-constexpr int contentTop = 96;
+constexpr int contentTop = 90;
 // A wider margin than a digital panel would use, so the walnut cheeks and the
 // top rail actually read as a cabinet around the instrument, not a border.
 constexpr int contentMargin = 26;
 constexpr int moduleGap = 10;
-constexpr int oscillatorHeight = 326;
-constexpr int oscillatorCardsHeight = 238;
-constexpr int oscillatorStripHeight = 78;
-// The strip carries eight knobs (unison/voice/noise/AM).  Its knob row is
-// laid out from stripKnobX to the right margin, so the per-knob width falls
-// as controls are added; the row height below is sized to keep each dial
-// legible at the 1200 px minimum editor width.
+constexpr int oscillatorCardsHeight = 258;
+constexpr int oscillatorStripHeight = 112;
+// Cards hold a primary dial (62) plus its caption.  The strip holds a
+// standard dial (50).  Both used to be clamped well below those grades.
+constexpr int oscillatorHeight = oscillatorCardsHeight + moduleGap + oscillatorStripHeight;
 constexpr int lowerSectionHeight = 190;
-constexpr int fxMinimumHeight = 152;
+// The FX strip only needs one standard row.  The old 152 px floor left an
+// empty metal band at 800 px; that height now belongs to the oscillator rows.
+constexpr int fxMinimumHeight = 112;
 constexpr int fxMaximumHeight = 268;
-constexpr int bottomMargin = 16;
+constexpr int bottomMargin = 8;
+// contentTop + oscillator + gap + lower + gap + fx minimum + bottom margin.
+static_assert (contentTop + oscillatorHeight + moduleGap + lowerSectionHeight
+                   + moduleGap + fxMinimumHeight + bottomMargin
+               == 800,
+               "minimum editor height drifted from the layout constants");
 // The layout constants below add up to a fixed 800 px of height, so this is the
 // real floor.  setResizeLimits declares it to the host and resized() enforces
 // it, because a resize limit is a request and a host may still deliver less.
@@ -443,15 +448,9 @@ void EonMiniEEFEditor::resized()
     loadButton.setBounds (headerLayout.actionsX + 2 * (headerLayout.actionWidth + 6), 27, headerLayout.actionWidth, 28);
     const int cardW = (w - 2 * m - gap) / 2;
     const int cardH = (oscillatorCardsHeight - gap) / 2;
-    // Rows reserve a little more than the dial itself so the engraved caption
-    // always has a line of its own below the knob.
-    constexpr int captionBand = 19;
-    const int primaryH = juce::roundToInt (EonAnalogLookAndFeel::dialDiameter (
-                            EonAnalogLookAndFeel::primary)) + captionBand;
-    const int standardH = juce::roundToInt (EonAnalogLookAndFeel::dialDiameter (
-                             EonAnalogLookAndFeel::standard)) + captionBand;
-    const int compactH = juce::roundToInt (EonAnalogLookAndFeel::dialDiameter (
-                            EonAnalogLookAndFeel::compact)) + captionBand;
+    const int primaryH = EonAnalogLookAndFeel::dialRowHeight (EonAnalogLookAndFeel::primary);
+    const int standardH = EonAnalogLookAndFeel::dialRowHeight (EonAnalogLookAndFeel::standard);
+    const int compactH = EonAnalogLookAndFeel::dialRowHeight (EonAnalogLookAndFeel::compact);
     std::array<juce::ComboBox*, 4> waveBoxes { &osc1Wave, &osc2Wave, &osc3Wave, &osc4Wave };
     for (int oscillator = 0; oscillator < 4; ++oscillator)
     {
@@ -459,34 +458,31 @@ void EonMiniEEFEditor::resized()
         const int row = oscillator / 2;
         const int cardX = m + column * (cardW + gap);
         const int cardY = top + row * (cardH + gap);
-        waveBoxes[static_cast<size_t> (oscillator)]->setBounds (cardX + 12, cardY + 43, 150, 26);
+        waveBoxes[static_cast<size_t> (oscillator)]->setBounds (cardX + 12, cardY + 42, 104, 26);
         constexpr int controlGap = 3;
-        const int controlsX = cardX + 170;
-        const int controlW = (cardW - 182 - 5 * controlGap) / 6;
+        const int controlsX = cardX + 124;
+        const int controlW = (cardW - 124 - 8 - 5 * controlGap) / 6;
         std::array<juce::Slider*, 6> controls {
             &oscLevel[oscillator], &oscCoarse[oscillator], &oscFine[oscillator],
             &oscPhase[oscillator], &oscPan[oscillator], &oscPulseWidth[oscillator]
         };
         for (int control = 0; control < 6; ++control)
             controls[static_cast<size_t> (control)]->setBounds (
-                controlsX + control * (controlW + controlGap), cardY + 48,
-                controlW, juce::jmin (primaryH, cardH - 57));
+                controlsX + control * (controlW + controlGap), cardY + 40,
+                controlW, juce::jmin (primaryH, cardH - 44));
     }
     const int stripY = top + oscillatorCardsHeight + gap;
-    voiceMode.setBounds (m + 14, stripY + 40, 142, 26);
+    voiceMode.setBounds (m + 14, stripY + 52, 142, 26);
     const int stripKnobX = m + 170;
     const int stripKnobW = (w - stripKnobX - m - 12) / 8;
     std::array<juce::Slider*, 8> stripControls {
         &unisonVoices, &unisonDetune, &unisonSpread, &unisonPhase, &unisonDrift,
         &voiceVariance, &noiseMix, &amDepth
     };
-    // The strip divides its width by eight; leaving the loop short renders
-    // the trailing controls bound but invisible (no bounds were ever set).
-    // The dial diameter is capped by this row height, not by the column width,
-    // so the row uses the full strip height below the title rule.  Eight
-    // controls share the width; the height is what keeps them legible.
-    const int stripKnobY = stripY + 27;
-    const int stripKnobH = juce::jmin (standardH, oscillatorStripHeight - 30);
+    // Eight standard dials sit under the title rule.  The row height is the
+    // grade, not whatever is left after the title.
+    const int stripKnobY = stripY + 40;
+    const int stripKnobH = juce::jmin (standardH, oscillatorStripHeight - 44);
     for (int control = 0; control < static_cast<int> (stripControls.size()); ++control)
         stripControls[static_cast<size_t> (control)]->setBounds (
             stripKnobX + control * stripKnobW, stripKnobY, stripKnobW - 4, stripKnobH);
@@ -498,11 +494,11 @@ void EonMiniEEFEditor::resized()
     const int fxY = h - bottomMargin - fxHeight;
     const int envW = (w - 2 * m - 2 * gap) * 32 / 100, filterW = (w - 2 * m - 2 * gap) * 30 / 100;
     int x = m + 18;
-    // Keep four envelope controls inside the panel at the supported 1040 px minimum
-    // editor width while allowing them to grow on wider layouts.
+    // Keep four envelope controls inside the panel at the 1200 px minimum
+    // while allowing them to grow on wider layouts.
     // Two envelope rows share the panel: the amp envelope on top, the
     // dedicated filter envelope underneath.
-    const int envRowH = juce::jmin (standardH, juce::jmax (46, (lowerH - 64) / 2));
+    const int envRowH = juce::jmin (standardH, juce::jmax (standardH, (lowerH - 48) / 2));
     const int knobW = juce::jlimit (48, 118, (envW - 80) / 5);
     for (auto* s : { &attack, &decay, &sustain, &release, &envCurve })
     {
@@ -512,13 +508,11 @@ void EonMiniEEFEditor::resized()
     x = m + 18;
     for (auto* s : { &filterAttack, &filterDecay, &filterSustain, &filterRelease, &filterEnvAmount })
     {
-        s->setBounds (x, lowerY + 46 + envRowH, knobW, envRowH);
+        s->setBounds (x, lowerY + 42 + envRowH + 4, knobW, envRowH);
         x += knobW + 8;
     }
     x = m + envW + gap + 18;
-    const int filterInnerW = juce::jmax (150, filterW - 36), filterGap = 10;
-    const int filterKnobW = juce::jlimit (64, 108, (filterInnerW - filterGap) / 2);
-    (void) filterKnobW;
+    const int filterInnerW = juce::jmax (150, filterW - 36);
     const int driveCurveWidth = 74;
     driveCurveMode.setBounds (x + filterInnerW - driveCurveWidth, lowerY + 8, driveCurveWidth, 24);
     filterMode.setBounds (x, lowerY + 44, filterInnerW - driveCurveWidth - 8, 26);
@@ -551,5 +545,5 @@ void EonMiniEEFEditor::resized()
     for (auto* s : { &fxWet, &delayTime, &delayFeedback, &delayStereo,
                       &chorusDepth, &chorusRate, &chorusMix,
                       &reverbMix, &reverbModulation })
-    { s->setBounds (x, fxY + 34, fxW, juce::jmin (standardH, fxHeight - 42)); x += fxW + 6; }
+    { s->setBounds (x, fxY + 40, fxW, juce::jmin (standardH, fxHeight - 44)); x += fxW + 6; }
 }

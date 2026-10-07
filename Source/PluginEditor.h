@@ -22,9 +22,11 @@ public:
     // docs/superpowers/specs/2026-09-30-dial-grade-adr.md for the reasoning.
     enum DialGrade { compact = 0, standard = 1, primary = 2 };
 
-    static constexpr float dialDiameter (int grade) noexcept
+    static constexpr float captionBand = 18.0f;
+
+    static constexpr int dialRowHeight (int grade) noexcept
     {
-        return grade == compact ? 40.0f : grade == primary ? 62.0f : 50.0f;
+        return (int) (dialDiameter (grade) + captionBand);
     }
 
     static juce::String interfaceFontFamily()
@@ -153,23 +155,18 @@ public:
                            float sliderPosProportional, float rotaryStartAngle,
                            float rotaryEndAngle, juce::Slider& slider) override
     {
-        constexpr float captionHeight = 17.0f;
-        const float dialHeight = juce::jmax (20.0f, (float) height - captionHeight - 2.0f);
-        // Analogue panels are densely populated: a small dial with a printed
-        // pointer reads as a control, while an oversized one reads as a gauge.
-        // The 0.84 factor and the 72 px ceiling keep the whole set in that
-        // range while preserving the ratio between the large and small dials.
-        // The diameter comes from the slider's declared grade, not from its
-        // bounds, so a row keeps the same knob size when the window resizes.
-        // Bounds still have to be large enough to hold it; resized() sizes the
-        // rows from the same constant.
+        constexpr float captionHeight = captionBand;
+        const float dialRoom = juce::jmax (20.0f, (float) height - captionHeight);
+        // Diameter is the declared grade.  The row is sized from dialRowHeight,
+        // so the only clamp left is a column that is genuinely narrower than
+        // the grade.  Ticks are pulled in rather than shrinking the cap.
         const int grade = slider.getProperties().getWithDefault ("eon.dialGrade",
                                                                 (int) standard);
         const float declared = dialDiameter (grade);
         const float diameter = juce::jmax (14.0f, juce::jmin (declared,
-            juce::jmin ((float) width - 2.0f, dialHeight)));
+            juce::jmin ((float) width - 2.0f, dialRoom)));
         const float cx = static_cast<float> (x) + static_cast<float> (width) * 0.5f;
-        const float cy = static_cast<float> (y) + dialHeight * 0.5f + 1.5f;
+        const float cy = static_cast<float> (y) + diameter * 0.5f + 1.0f;
         const float radius = diameter * 0.5f;
         const auto centre = juce::Point<float> (cx, cy);
         const auto pointOnRing = [&] (float angle, float distance)
@@ -187,18 +184,11 @@ public:
         // direction (upper-left) is used for every element on the panel, so
         // the whole face looks lit by the same lamp instead of each part
         // carrying its own highlight.
-        const float barrelHeight = juce::jmin (4.5f, radius * 0.16f);
-
-        // Contact shadow on the panel, offset away from the light.
-        g.setColour (juce::Colours::black.withAlpha (0.34f));
-        g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.10f, radius * 0.16f + barrelHeight));
-        g.setColour (juce::Colours::black.withAlpha (0.20f));
-        g.fillEllipse (outer.reduced (radius * 0.28f)
-                                 .translated (radius * 0.13f, radius * 0.19f + barrelHeight));
+        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.05f, radius * 0.06f));
 
         // Barrel wall: the skirt the cap is pressed into, lit from upper-left.
-        const auto barrel = juce::Rectangle<float> (centre.x - radius, centre.y - radius + barrelHeight,
-                                                     diameter, diameter);
+        const auto barrel = outer;
         juce::ColourGradient wall (juce::Colour (0xFF3A342D), centre.x - radius, centre.y,
                                    juce::Colour (0xFF15120F), centre.x + radius, centre.y + diameter, false);
         g.setGradientFill (wall);
@@ -287,7 +277,8 @@ public:
             const float t = static_cast<float> (tick) / 10.0f;
             const float angle = rotaryStartAngle + t * (rotaryEndAngle - rotaryStartAngle);
             const bool major = tick % 2 == 0;
-            const auto tickOuter = pointOnRing (angle, radius + 3.0f);
+            const float tickReach = juce::jmin (radius + 3.0f, (float) width * 0.5f - 1.5f);
+            const auto tickOuter = pointOnRing (angle, tickReach);
             const auto tickInner = pointOnRing (angle, radius + (major ? -0.8f : 1.0f));
             g.setColour (juce::Colour (0xffe8d9b8).withAlpha (major ? 0.62f : 0.34f));
             g.drawLine (tickOuter.x, tickOuter.y, tickInner.x, tickInner.y, major ? 1.0f : 0.65f);
@@ -312,7 +303,8 @@ public:
         g.setColour (juce::Colour (0xff241d16));
         g.drawLine (centre.x, centre.y, pointer.x, pointer.y, 2.2f);
 
-        const auto caption = juce::Rectangle<int> (x + 1, y + height - 17, width - 2, 16);
+        const auto caption = juce::Rectangle<int> (x + 1, y + height - (int) captionHeight,
+                                                    width - 2, (int) captionHeight - 2);
         const bool isAdjusting = slider.getProperties().getWithDefault ("eon.dragging", false);
         const auto text = isAdjusting ? slider.getTextFromValue (slider.getValue()).toUpperCase()
                                       : slider.getName();
