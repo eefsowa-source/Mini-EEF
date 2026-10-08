@@ -85,17 +85,30 @@ Rendered render (const juce::MidiBuffer& midi, double sampleRate, int blockSize,
 float goertzelPower (const juce::AudioBuffer<float>& buffer, int start, int num,
                      double sampleRate, float frequency)
 {
+    // Hann window: first sidelobe is about -31 dB, so a bin 2 semitones away
+    // does not inherit the rectangular-window leak of the fundamental.
     const double omega = 2.0 * juce::MathConstants<double>::pi * frequency / sampleRate;
     const double coeff = 2.0 * std::cos (omega);
+    const double denom = juce::jmax (1, num - 1);
     double q0 = 0.0, q1 = 0.0, q2 = 0.0;
     const float* samples = buffer.getReadPointer (0);
     for (int i = 0; i < num; ++i)
     {
-        q0 = coeff * q1 - q2 + samples[start + i];
+        const double window = 0.5 * (1.0 - std::cos (2.0 * juce::MathConstants<double>::pi * i / denom));
+        q0 = coeff * q1 - q2 + window * samples[start + i];
         q2 = q1;
         q1 = q0;
     }
     return static_cast<float> (q1 * q1 + q2 * q2 - coeff * q1 * q2);
+}
+
+bool fundamentalDominates (const juce::AudioBuffer<float>& buffer, int start, int num,
+                           double sampleRate, float frequency)
+{
+    const float fundamental = goertzelPower (buffer, start, num, sampleRate, frequency);
+    const float second = goertzelPower (buffer, start, num, sampleRate, frequency * 2.0f);
+    const float third = goertzelPower (buffer, start, num, sampleRate, frequency * 3.0f);
+    return fundamental > second * 20.0f && fundamental > third * 20.0f;
 }
 
 float rms (const juce::AudioBuffer<float>& buffer, int start, int num)
@@ -138,6 +151,8 @@ int main()
 
     const float centreAt440 = goertzelPower (centre.buffer, start, analysisNum, sampleRate, centreHz);
     const float centreAtUp = goertzelPower (centre.buffer, start, analysisNum, sampleRate, upHz);
+    if (! fundamentalDominates (centre.buffer, start, analysisNum, sampleRate, centreHz))
+        return fail ("harmonic-centre", "fundamental is not 20x H2/H3; sine setup is wrong") ? 0 : 1;
     if (! (centreAt440 > centreAtUp * 4.0f))
         return fail ("wheel-centre", "440 power " + std::to_string (centreAt440)
                      + " not above bent " + std::to_string (centreAtUp)) ? 0 : 1;
@@ -148,6 +163,8 @@ int main()
     const auto up = render (upMidi, sampleRate, blockSize, total);
     const float upAtUp = goertzelPower (up.buffer, start, analysisNum, sampleRate, upHz);
     const float upAt440 = goertzelPower (up.buffer, start, analysisNum, sampleRate, centreHz);
+    if (! fundamentalDominates (up.buffer, start, analysisNum, sampleRate, upHz))
+        return fail ("harmonic-up", "bent fundamental is not 20x H2/H3") ? 0 : 1;
     if (! (upAtUp > upAt440 * 2.0f))
         return fail ("wheel-up", "bent power " + std::to_string (upAtUp)
                      + " not above 440 " + std::to_string (upAt440)) ? 0 : 1;
