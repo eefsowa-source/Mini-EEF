@@ -234,8 +234,11 @@ public:
 
         // The cream cap: warm, slightly domed, matte rather than glossy.  The
         // gradient runs from the lit upper-left to the shaded lower-right.
-        juce::ColourGradient cap (juce::Colour (0xFFF7EEDC), face.getX(), face.getY(),
-                                  juce::Colour (0xFFBCAC8E), face.getRight(), face.getBottom(), false);
+        const bool brassCap = slider.getProperties().getWithDefault ("eon.brass", false);
+        juce::ColourGradient cap (brassCap ? juce::Colour (0xFFF6D78C) : juce::Colour (0xFFF7EEDC),
+                                  face.getX(), face.getY(),
+                                  brassCap ? juce::Colour (0xFF6B4A1C) : juce::Colour (0xFFBCAC8E),
+                                  face.getRight(), face.getBottom(), false);
         g.setGradientFill (cap);
         g.fillEllipse (face);
         const auto capInset = face.reduced (1.5f);
@@ -248,9 +251,11 @@ public:
         if (slider.getProperties().getWithDefault ("eon.raised", false))
         {
             const auto dome = capInset.reduced (radius * 0.16f);
-            juce::ColourGradient domeLight (juce::Colour (0xFFFFF6E4).withAlpha (0.55f),
+            juce::ColourGradient domeLight (brassCap ? juce::Colour (0xFFFFE7A8).withAlpha (0.70f)
+                                                      : juce::Colour (0xFFFFF6E4).withAlpha (0.55f),
                                             dome.getX(), dome.getY(),
-                                            juce::Colour (0xFF8C7350).withAlpha (0.0f),
+                                            brassCap ? juce::Colour (0xFF6B4A1C).withAlpha (0.0f)
+                                                     : juce::Colour (0xFF8C7350).withAlpha (0.0f),
                                             dome.getRight(), dome.getBottom(), true);
             g.setGradientFill (domeLight);
             g.fillEllipse (dome);
@@ -311,7 +316,7 @@ public:
         juce::Path arc;
         arc.addCentredArc (cx, cy, radius + 1.2f, radius + 1.2f,
                            0.0f, rotaryStartAngle, valueAngle, true);
-        g.setColour (juce::Colour (0xfff0d9a8).withAlpha (0.50f));
+        g.setColour ((brassCap ? juce::Colour (0xfff6d78c) : juce::Colour (0xfff0d9a8)).withAlpha (brassCap ? 0.85f : 0.50f));
         g.strokePath (arc, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
                                                   juce::PathStrokeType::rounded));
 

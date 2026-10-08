@@ -142,7 +142,10 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     constexpr auto primary = EonAnalogLookAndFeel::primary;
     lfoRateAttachment=bind(lfoRate,ParamIDs::lfoRate,"LFO RATE",primary); lfoDepthAttachment=bind(lfoDepth,ParamIDs::lfoDepth,"LFO CUTOFF",primary); lfoPitchAttachment=bind(lfoPitch,ParamIDs::lfoPitch,"LFO PITCH",primary); velocityAttachment=bind(velocityAmount,ParamIDs::velocityAmount,"VELOCITY",primary);
     for (auto* lfo : { &lfoRate, &lfoDepth, &lfoPitch, &velocityAmount })
+    {
         lfo->getProperties().set ("eon.raised", true);
+        lfo->getProperties().set ("eon.brass", true);
+    }
     for (int slot = 0; slot < 4; ++slot)
     {
         modAmountAttachment[static_cast<size_t> (slot)] = bind (
