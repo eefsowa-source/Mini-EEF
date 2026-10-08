@@ -41,6 +41,37 @@ namespace
         return 0.0f;
     }
 
+    // Four-point residual for one side of a step.  The two-point kernel above
+    // stays on the pulse: that waveform's harmonic series is a locked
+    // measurement.  This one is only for the saw, whose out-of-band residual
+    // was measured rising to 16% near 8 kHz and does not move when the drive
+    // oversampler changes order.
+    float blep4Side (float t, float dt) noexcept
+    {
+        if (t < 0.0f || t >= 2.0f * dt)
+            return 0.0f;
+        const float x = t / dt;
+        float u = 2.0f - x;
+        u *= u;
+        u *= u;
+        float y = u;
+        if (t < dt)
+        {
+            float v = 1.0f - x;
+            v *= v;
+            v *= v;
+            y -= 4.0f * v;
+        }
+        return y * (1.0f / 12.0f);
+    }
+
+    float blep4 (float t, float dt) noexcept
+    {
+        // 2*dt must stay inside one cycle, or the two sides of the edge overlap.
+        dt = juce::jlimit (1.0e-5f, 0.45f, dt);
+        return blep4Side (t, dt) - blep4Side (1.0f - t, dt);
+    }
+
     inline float cubicInterpolate (float y0, float y1, float y2, float y3,
                                    float fraction) noexcept
     {
@@ -104,13 +135,13 @@ namespace
             case 3: // Sine
                 return std::sin (juce::MathConstants<float>::twoPi * phase);
 
-            case 0: // PolyBLEP saw
-                return 2.0f * phase - 1.0f + blep (phase, dt);
+            case 0: // four-point PolyBLEP saw
+                return 2.0f * phase - 1.0f + blep4 (phase, dt);
 
             case 4: return analogOscillatorSample (phase, analogDrive);
 
             default:
-                return 2.0f * phase - 1.0f + blep (phase, dt);
+                return 2.0f * phase - 1.0f + blep4 (phase, dt);
         }
     }
 
