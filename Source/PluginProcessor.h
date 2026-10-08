@@ -100,6 +100,8 @@ private:
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
     juce::dsp::Oversampling<float> oversampling4x { 2, 2,
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+    juce::dsp::Oversampling<float> oversampling8x { 2, 3,
+        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
     int oversamplingBlockSize = 0;
     static constexpr int latencyBufferCapacity = 256;
     std::array<std::array<float, latencyBufferCapacity>, 2> latencyBuffer {};

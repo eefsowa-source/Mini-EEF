@@ -1485,7 +1485,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::reverbModulation, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParamIDs::oversampling, "Oversampling",
-        juce::StringArray { "1x Eco", "2x Quality", "4x High" }, 0));
+        juce::StringArray { "1x Eco", "2x Quality", "4x High", "8x Ultra" }, 0));
 
     const juce::StringArray modSources {
         "Off", "LFO", "Amp Env", "Velocity", "Osc 1", "Filter Env"
@@ -1511,7 +1511,7 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
 {
     const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
     const int mode = modeParameter != nullptr
-        ? juce::jlimit (0, 2, juce::roundToInt (modeParameter->load())) : 0;
+        ? juce::jlimit (0, 3, juce::roundToInt (modeParameter->load())) : 0;
     const bool willOversample = mode != 0;
     oversamplingActive.store (willOversample, std::memory_order_relaxed);
 
@@ -1523,7 +1523,7 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         && buffer.getNumSamples() <= oversamplingBlockSize)
     {
         auto block = juce::dsp::AudioBlock<float> (buffer);
-        auto& oversampler = mode == 1 ? oversampling2x : oversampling4x;
+        auto& oversampler = mode == 1 ? oversampling2x : mode == 2 ? oversampling4x : oversampling8x;
         activeOversamplingLatency = juce::roundToInt (oversampler.getLatencyInSamples());
         auto highRateBlock = oversampler.processSamplesUp (block);
 
@@ -1578,13 +1578,13 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         oversampler.processSamplesDown (block);
     }
 
-    // Report one fixed latency to the host and delay the 1x/2x paths to match
-    // the 4x path.  This avoids timing jumps and comb filtering when quality
+    // Report one fixed latency to the host and delay the lower paths to match
+    // the 8x path.  This avoids timing jumps and comb filtering when quality
     // changes without calling host-notification APIs on the audio thread.
     const int compensation = juce::jlimit (0, latencyBufferCapacity - 1,
         fixedLatencySamples - activeOversamplingLatency);
     const int latencyChannels = juce::jmin (2, buffer.getNumChannels());
-    // The write always happens: a host can switch to 2x or 4x mid-stream, and
+    // The write always happens: a host can switch to 2x, 4x, or 8x mid-stream, and
     // the compensation read needs the samples that were written while 1x was
     // active.  Only the read is skipped when there is nothing to compensate.
     const bool needsRead = compensation != 0;
@@ -1702,7 +1702,7 @@ void EonMiniEEFProcessor::resetReverbState() noexcept
     reverbModulationPhase = 0.0;
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1737,6 +1737,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             channel.fill (0.0f);
         oversampling2x.reset();
         oversampling4x.reset();
+        oversampling8x.reset();
     }
     if (auto* playhead = getPlayHead())
         if (auto position = playhead->getPosition())
