@@ -449,9 +449,18 @@ public:
             clearCurrentNote();
     }
 
-    void pitchWheelMoved (int) override {}
+    void pitchWheelMoved (int value) override
+    {
+        setPitchBendSemitones ((static_cast<float> (value) - 8192.0f) / 8192.0f * 2.0f);
+    }
     void controllerMoved (int, int) override {}
     void channelPressureChanged (int) override {}
+
+    // Fixed +/-2 semitone wheel. 0 keeps the legacy frequency path at exactly 1.
+    void setPitchBendSemitones (float semitones) noexcept
+    {
+        pitchBendSemis = juce::jlimit (-2.0f, 2.0f, semitones);
+    }
 
     void resetForStateLoad() noexcept
     {
@@ -459,6 +468,8 @@ public:
         setKeyDown (false);
         setSustainPedalDown (false);
         setSostenutoPedalDown (false);
+        pitchBendSemis = 0.0f;
+        pitchBendRatio = 1.0f;
         clearCurrentNote();
         state.fill (0.0f);
         svfIc1.fill (0.0f);
@@ -700,9 +711,13 @@ public:
             // needs to keep the modulation itself inside a sane band.
             matrixPwm = juce::jlimit (-0.45f, 0.45f, matrixPwm);
             osc1FmAmount = juce::jlimit (-0.5f, 0.5f, osc1FmAmount);
+            // Wheel centre (8192) stays at ratio 1, so existing renders are unchanged.
+            const float bendTarget = std::exp2f (pitchBendSemis / 12.0f);
+            const float bendCoeff = 1.0f - std::exp (-1.0f / (0.005f * static_cast<float> (sr)));
+            pitchBendRatio += (bendTarget - pitchBendRatio) * bendCoeff;
             const float modulatedFrequency = baseFrequency * std::exp2f (matrixPitch / 12.0f)
                 * std::exp2f (lfo * lfoPitch->load() / 12.0f)
-                * pitchVarianceRatio;
+                * pitchVarianceRatio * pitchBendRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
             // behaviour instead of phase folding on the very top notes.
@@ -1136,6 +1151,7 @@ private:
     // (roadmap P1.2/P1.3).
     EnvelopeCurveState ampEnvelopeState {}, filterEnvelopeState {};
     float envCurveAmount = 0.0f, sustainLevel = 0.8f, filterSustainLevel = 0.8f;
+    float pitchBendSemis = 0.0f, pitchBendRatio = 1.0f;
     juce::ADSR filterEnv;
     float filterEnvAmount = 0.0f;
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
@@ -1157,7 +1173,10 @@ private:
 struct EonSound:juce::SynthesiserSound{bool appliesToNote(int)override{return true;}bool appliesToChannel(int)override{return true;}};
 struct NoteOnlySynthesiser final : juce::Synthesiser
 {
-    explicit NoteOnlySynthesiser (EonMiniEEFProcessor& processor) : p (processor) {}
+    explicit NoteOnlySynthesiser (EonMiniEEFProcessor& processor) : p (processor)
+    {
+        pitchWheel.fill (8192);
+    }
 
     void renderNotesOnlyNoLock (juce::AudioBuffer<float>& output,
                                 const juce::MidiBuffer& midi,
@@ -1194,6 +1213,8 @@ struct NoteOnlySynthesiser final : juce::Synthesiser
                 eonVoice->resetForStateLoad();
         for (auto& channel : heldVelocity)
             channel.fill (0.0f);
+        pitchWheel.fill (8192);
+        sustainDown.fill (false);
         for (auto& channel : heldSequence)
             channel.fill (0);
         nextSequence = 0;
@@ -1278,8 +1299,47 @@ private:
         return oldestVoiceMatching (false);
     }
 
+    void applyPitchBendNoLock (int channel) noexcept
+    {
+        const int channelIndex = juce::jlimit (1, 16, channel) - 1;
+        const float semis = (static_cast<float> (pitchWheel[static_cast<size_t> (channelIndex)]) - 8192.0f)
+                            / 8192.0f * 2.0f;
+        for (auto* voice : voices)
+            if (voice->isPlayingChannel (channel))
+                static_cast<EonVoice*> (voice)->setPitchBendSemitones (semis);
+    }
+
+    void releaseSustainedVoicesNoLock (int channel) noexcept
+    {
+        for (auto* voice : voices)
+        {
+            if (! voice->isPlayingChannel (channel) || voice->isKeyDown() || ! voice->isSustainPedalDown())
+                continue;
+            voice->setSustainPedalDown (false);
+            stopVoice (voice, 0.0f, true);
+        }
+    }
+
     void handleNoteEventNoLock (const juce::MidiMessage& message) noexcept
     {
+        if (message.isPitchWheel())
+        {
+            const int channel = juce::jlimit (1, 16, message.getChannel());
+            pitchWheel[static_cast<size_t> (channel - 1)] = static_cast<std::uint16_t> (message.getPitchWheelValue());
+            applyPitchBendNoLock (channel);
+            return;
+        }
+
+        if (message.isController() && message.getControllerNumber() == 64)
+        {
+            const int channel = juce::jlimit (1, 16, message.getChannel());
+            const bool down = message.getControllerValue() >= 64;
+            sustainDown[static_cast<size_t> (channel - 1)] = down;
+            if (! down)
+                releaseSustainedVoicesNoLock (channel);
+            return;
+        }
+
         if (message.isNoteOn())
         {
             const int channel = message.getChannel();
@@ -1290,8 +1350,10 @@ private:
             {
                 stopAllVoicesImmediatelyNoLock();
                 auto* sound = sounds.isEmpty() ? nullptr : sounds.getUnchecked (0).get();
-                startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
+                auto* voice = startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
                             message.getFloatVelocity());
+                juce::ignoreUnused (voice);
+                applyPitchBendNoLock (channel);
                 return;
             }
 
@@ -1303,6 +1365,7 @@ private:
             auto* sound = sounds.isEmpty() ? nullptr : sounds.getUnchecked (0).get();
             startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
                         message.getFloatVelocity());
+            applyPitchBendNoLock (channel);
             return;
         }
 
@@ -1311,6 +1374,17 @@ private:
             const int channel = message.getChannel();
             const int noteNumber = message.getNoteNumber();
             forgetNoteNoLock (channel, noteNumber);
+            if (sustainDown[static_cast<size_t> (juce::jlimit (1, 16, channel) - 1)])
+            {
+                for (auto* voice : voices)
+                {
+                    if (voice->getCurrentlyPlayingNote() != noteNumber || ! voice->isPlayingChannel (channel))
+                        continue;
+                    voice->setKeyDown (false);
+                    voice->setSustainPedalDown (true);
+                }
+                return;
+            }
 
             if (isMonoModeNoLock())
             {
@@ -1353,6 +1427,8 @@ private:
 
     EonMiniEEFProcessor& p;
     std::array<std::array<float, 128>, 16> heldVelocity {};
+    std::array<std::uint16_t, 16> pitchWheel {};
+    std::array<bool, 16> sustainDown {};
     std::array<std::array<std::uint32_t, 128>, 16> heldSequence {};
     std::uint32_t nextSequence = 0;
 };
