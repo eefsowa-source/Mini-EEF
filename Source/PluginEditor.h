@@ -117,14 +117,19 @@ public:
         g.fillRoundedRectangle (bounds.translated (0.0f, press), 4.0f);
         g.setColour (juce::Colour (0xffd9a441).withAlpha (highlighted ? 0.86f : 0.55f));
         g.drawRoundedRectangle (bounds.translated (0.0f, press), 4.0f, 0.9f);
-        g.setColour (juce::Colours::black.withAlpha (0.60f));
-        g.drawRoundedRectangle (bounds.reduced (1.3f).translated (0.0f, press), 3.1f, 0.65f);
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.drawLine (bounds.getX() + 7.0f, bounds.getCentreY() + press,
+                    bounds.getRight() - 7.0f, bounds.getCentreY() + press, 1.0f);
+        g.setColour (juce::Colour (0xfff2e7d2).withAlpha (0.28f));
+        g.drawLine (bounds.getX() + 7.0f, bounds.getCentreY() - 1.0f + press,
+                    bounds.getRight() - 7.0f, bounds.getCentreY() - 1.0f + press, 0.6f);
     }
 
     void drawComboBox (juce::Graphics& g, int width, int height, bool down,
                        int buttonX, int buttonY, int buttonW, int buttonH,
                        juce::ComboBox&) override
     {
+        juce::ignoreUnused (buttonX, buttonY, buttonW, buttonH);
         const auto bounds = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (1.0f);
         const auto face = juce::Colour (0xFF2F2A22);
         g.setColour (juce::Colour (0x5c000000));
@@ -138,17 +143,25 @@ public:
         g.setColour (juce::Colour (0xff090a0b).withAlpha (0.85f));
         g.drawRoundedRectangle (bounds.reduced (1.4f), 2.5f, 0.6f);
 
-        const auto arrowArea = juce::Rectangle<float> ((float) buttonX, (float) buttonY,
-                                                        (float) buttonW, (float) buttonH).reduced (6.0f, 0.0f);
-        const float cx = arrowArea.getCentreX();
-        const float cy = arrowArea.getCentreY() + 1.0f;
-        juce::Path arrow;
-        arrow.startNewSubPath (cx - 5.0f, cy - 2.0f);
-        arrow.lineTo (cx, cy + 3.0f);
-        arrow.lineTo (cx + 5.0f, cy - 2.0f);
-        g.setColour (juce::Colour (0xFFF6E7C6).withAlpha (down ? 1.0f : 0.92f));
-        g.strokePath (arrow, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
+        const auto well = bounds.reduced (3.2f, 3.0f);
+        g.setColour (juce::Colour (0xFF100C09));
+        g.fillRoundedRectangle (well, 2.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (well, 2.0f, 0.8f);
+
+        const auto tab = juce::Rectangle<float> ((float) width - 18.0f, 5.0f, 9.0f, (float) height - 10.0f);
+        juce::ColourGradient tabMetal (juce::Colour (0xFFE7C98A), tab.getCentreX(), tab.getY(),
+                                       juce::Colour (0xFF6B4A1C), tab.getCentreX(), tab.getBottom(), false);
+        g.setGradientFill (tabMetal);
+        g.fillRoundedRectangle (tab, 1.5f);
+        g.setColour (juce::Colour (0xFF2A1C10));
+        g.drawLine (tab.getCentreX(), tab.getY() + 3.0f, tab.getCentreX(), tab.getBottom() - 3.0f, 1.0f);
+    }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (8, 1, box.getWidth() - 28, box.getHeight() - 2);
+        label.setFont (getComboBoxFont (box));
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -177,7 +190,7 @@ public:
 
         const auto outer = juce::Rectangle<float> (centre.x - radius, centre.y - radius, diameter, diameter);
         const auto rim = outer.reduced (2.0f);
-        const auto face = outer.reduced (4.6f);
+        const auto face = outer.reduced (juce::jmax (5.0f, radius * 0.28f));
 
         // A moulded knob is a cylinder, not a disc: draw the barrel wall below
         // the cap so the control reads as a part with height.  One light
