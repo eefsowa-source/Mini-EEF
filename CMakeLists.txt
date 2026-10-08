@@ -143,5 +143,13 @@ target_link_libraries(EonMiniEEF_WaveHarmonics PRIVATE EonMiniEEF juce::juce_aud
 
 add_test(NAME wave_harmonic_baseline
     COMMAND $<TARGET_FILE:EonMiniEEF_WaveHarmonics>)
+
+# Pitch bend +/-2 semitones and CC64 sustain. Headless processor render.
+add_executable(EonMiniEEF_MidiContract tools/MidiContract.cpp)
+target_compile_features(EonMiniEEF_MidiContract PRIVATE cxx_std_20)
+target_compile_definitions(EonMiniEEF_MidiContract PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+target_include_directories(EonMiniEEF_MidiContract PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/EonMiniEEF_artefacts/JuceLibraryCode)
+target_link_libraries(EonMiniEEF_MidiContract PRIVATE EonMiniEEF juce::juce_audio_utils juce::juce_dsp)
+add_test(NAME midi_contract COMMAND $<TARGET_FILE:EonMiniEEF_MidiContract>)
 set_tests_properties(wave_harmonic_baseline PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
