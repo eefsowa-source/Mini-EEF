@@ -87,7 +87,7 @@ EonMiniEEFEditor::EonMiniEEFEditor(EonMiniEEFProcessor& p):AudioProcessorEditor(
     presetMenu.setColour(juce::ComboBox::outlineColourId, edge);
     presetMenu.onChange = [this] { applyPreset (presetMenu.getSelectedItemIndex()); };
     addAndMakeVisible (presetMenu);
-    oversamplingMode.addItemList ({ "1x Eco", "2x Quality", "4x High" }, 1);
+    oversamplingMode.addItemList ({ "1x Eco", "2x Quality", "4x High", "8x Ultra" }, 1);
     oversamplingMode.setColour (juce::ComboBox::backgroundColourId, panel);
     oversamplingMode.setColour (juce::ComboBox::textColourId, ivory);
     oversamplingMode.setColour (juce::ComboBox::outlineColourId, edge);

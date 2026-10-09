@@ -116,10 +116,10 @@ int runFactoryPresetContractRegression()
     }
 
     // All quality modes must expose one stable, non-zero host latency.  The
-    // processor compensates the lower-quality paths to the 4x path so changing
+    // processor compensates the lower-quality paths to the 8x path so changing
     // quality cannot move the instrument relative to the DAW timeline.
     int reportedQualityLatency = -1;
-    for (const float mode : { 0.0f, 1.0f, 2.0f })
+    for (const float mode : { 0.0f, 1.0f, 2.0f, 3.0f })
     {
         EonMiniEEFProcessor latencyProbe;
         if (auto* quality = latencyProbe.apvts.getParameter (ParamIDs::oversampling))
