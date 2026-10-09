@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "UI/CoalescedRepaint.h"
 
 // A hardware-style control layer: compact engraved typography, a powder-coated
 // chassis and physically layered knobs make fast sound shaping possible
@@ -21,9 +22,11 @@ public:
     // docs/superpowers/specs/2026-09-30-dial-grade-adr.md for the reasoning.
     enum DialGrade { compact = 0, standard = 1, primary = 2 };
 
-    static constexpr float dialDiameter (int grade) noexcept
+    static constexpr float captionBand = 18.0f;
+
+    static constexpr int dialRowHeight (int grade) noexcept
     {
-        return grade == compact ? 40.0f : grade == primary ? 62.0f : 50.0f;
+        return (int) (dialDiameter (grade) + captionBand);
     }
 
     static juce::String interfaceFontFamily()
@@ -114,14 +117,19 @@ public:
         g.fillRoundedRectangle (bounds.translated (0.0f, press), 4.0f);
         g.setColour (juce::Colour (0xffd9a441).withAlpha (highlighted ? 0.86f : 0.55f));
         g.drawRoundedRectangle (bounds.translated (0.0f, press), 4.0f, 0.9f);
-        g.setColour (juce::Colours::black.withAlpha (0.60f));
-        g.drawRoundedRectangle (bounds.reduced (1.3f).translated (0.0f, press), 3.1f, 0.65f);
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.drawLine (bounds.getX() + 7.0f, bounds.getCentreY() + press,
+                    bounds.getRight() - 7.0f, bounds.getCentreY() + press, 1.0f);
+        g.setColour (juce::Colour (0xfff2e7d2).withAlpha (0.28f));
+        g.drawLine (bounds.getX() + 7.0f, bounds.getCentreY() - 1.0f + press,
+                    bounds.getRight() - 7.0f, bounds.getCentreY() - 1.0f + press, 0.6f);
     }
 
     void drawComboBox (juce::Graphics& g, int width, int height, bool down,
                        int buttonX, int buttonY, int buttonW, int buttonH,
                        juce::ComboBox&) override
     {
+        juce::ignoreUnused (buttonX, buttonY, buttonW, buttonH);
         const auto bounds = juce::Rectangle<float> (0.0f, 0.0f, (float) width, (float) height).reduced (1.0f);
         const auto face = juce::Colour (0xFF2F2A22);
         g.setColour (juce::Colour (0x5c000000));
@@ -135,40 +143,43 @@ public:
         g.setColour (juce::Colour (0xff090a0b).withAlpha (0.85f));
         g.drawRoundedRectangle (bounds.reduced (1.4f), 2.5f, 0.6f);
 
-        const auto arrowArea = juce::Rectangle<float> ((float) buttonX, (float) buttonY,
-                                                        (float) buttonW, (float) buttonH).reduced (6.0f, 0.0f);
-        const float cx = arrowArea.getCentreX();
-        const float cy = arrowArea.getCentreY() + 1.0f;
-        juce::Path arrow;
-        arrow.startNewSubPath (cx - 5.0f, cy - 2.0f);
-        arrow.lineTo (cx, cy + 3.0f);
-        arrow.lineTo (cx + 5.0f, cy - 2.0f);
-        g.setColour (juce::Colour (0xFFF6E7C6).withAlpha (down ? 1.0f : 0.92f));
-        g.strokePath (arrow, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved,
-                                                    juce::PathStrokeType::rounded));
+        const auto well = bounds.reduced (3.2f, 3.0f);
+        g.setColour (juce::Colour (0xFF100C09));
+        g.fillRoundedRectangle (well, 2.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (well, 2.0f, 0.8f);
+
+        const auto tab = juce::Rectangle<float> ((float) width - 18.0f, 5.0f, 9.0f, (float) height - 10.0f);
+        juce::ColourGradient tabMetal (juce::Colour (0xFFE7C98A), tab.getCentreX(), tab.getY(),
+                                       juce::Colour (0xFF6B4A1C), tab.getCentreX(), tab.getBottom(), false);
+        g.setGradientFill (tabMetal);
+        g.fillRoundedRectangle (tab, 1.5f);
+        g.setColour (juce::Colour (0xFF2A1C10));
+        g.drawLine (tab.getCentreX(), tab.getY() + 3.0f, tab.getCentreX(), tab.getBottom() - 3.0f, 1.0f);
+    }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (8, 1, box.getWidth() - 28, box.getHeight() - 2);
+        label.setFont (getComboBoxFont (box));
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                            float sliderPosProportional, float rotaryStartAngle,
                            float rotaryEndAngle, juce::Slider& slider) override
     {
-        constexpr float captionHeight = 17.0f;
-        const float dialHeight = juce::jmax (20.0f, (float) height - captionHeight - 2.0f);
-        // Analogue panels are densely populated: a small dial with a printed
-        // pointer reads as a control, while an oversized one reads as a gauge.
-        // The 0.84 factor and the 72 px ceiling keep the whole set in that
-        // range while preserving the ratio between the large and small dials.
-        // The diameter comes from the slider's declared grade, not from its
-        // bounds, so a row keeps the same knob size when the window resizes.
-        // Bounds still have to be large enough to hold it; resized() sizes the
-        // rows from the same constant.
+        constexpr float captionHeight = captionBand;
+        const float dialRoom = juce::jmax (20.0f, (float) height - captionHeight);
+        // Diameter is the declared grade.  The row is sized from dialRowHeight,
+        // so the only clamp left is a column that is genuinely narrower than
+        // the grade.  Ticks are pulled in rather than shrinking the cap.
         const int grade = slider.getProperties().getWithDefault ("eon.dialGrade",
                                                                 (int) standard);
         const float declared = dialDiameter (grade);
         const float diameter = juce::jmax (14.0f, juce::jmin (declared,
-            juce::jmin ((float) width - 2.0f, dialHeight)));
+            juce::jmin ((float) width - 2.0f, dialRoom)));
         const float cx = static_cast<float> (x) + static_cast<float> (width) * 0.5f;
-        const float cy = static_cast<float> (y) + dialHeight * 0.5f + 1.5f;
+        const float cy = static_cast<float> (y) + diameter * 0.5f + 1.0f;
         const float radius = diameter * 0.5f;
         const auto centre = juce::Point<float> (cx, cy);
         const auto pointOnRing = [&] (float angle, float distance)
@@ -179,25 +190,18 @@ public:
 
         const auto outer = juce::Rectangle<float> (centre.x - radius, centre.y - radius, diameter, diameter);
         const auto rim = outer.reduced (2.0f);
-        const auto face = outer.reduced (4.6f);
+        const auto face = outer.reduced (juce::jmax (5.0f, radius * 0.28f));
 
         // A moulded knob is a cylinder, not a disc: draw the barrel wall below
         // the cap so the control reads as a part with height.  One light
         // direction (upper-left) is used for every element on the panel, so
         // the whole face looks lit by the same lamp instead of each part
         // carrying its own highlight.
-        const float barrelHeight = juce::jmin (4.5f, radius * 0.16f);
-
-        // Contact shadow on the panel, offset away from the light.
-        g.setColour (juce::Colours::black.withAlpha (0.34f));
-        g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.10f, radius * 0.16f + barrelHeight));
-        g.setColour (juce::Colours::black.withAlpha (0.20f));
-        g.fillEllipse (outer.reduced (radius * 0.28f)
-                                 .translated (radius * 0.13f, radius * 0.19f + barrelHeight));
+        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.05f, radius * 0.06f));
 
         // Barrel wall: the skirt the cap is pressed into, lit from upper-left.
-        const auto barrel = juce::Rectangle<float> (centre.x - radius, centre.y - radius + barrelHeight,
-                                                     diameter, diameter);
+        const auto barrel = outer;
         juce::ColourGradient wall (juce::Colour (0xFF3A342D), centre.x - radius, centre.y,
                                    juce::Colour (0xFF15120F), centre.x + radius, centre.y + diameter, false);
         g.setGradientFill (wall);
@@ -243,8 +247,11 @@ public:
 
         // The cream cap: warm, slightly domed, matte rather than glossy.  The
         // gradient runs from the lit upper-left to the shaded lower-right.
-        juce::ColourGradient cap (juce::Colour (0xFFF7EEDC), face.getX(), face.getY(),
-                                  juce::Colour (0xFFBCAC8E), face.getRight(), face.getBottom(), false);
+        const bool brassCap = slider.getProperties().getWithDefault ("eon.brass", false);
+        juce::ColourGradient cap (brassCap ? juce::Colour (0xFFF6D78C) : juce::Colour (0xFFF7EEDC),
+                                  face.getX(), face.getY(),
+                                  brassCap ? juce::Colour (0xFF6B4A1C) : juce::Colour (0xFFBCAC8E),
+                                  face.getRight(), face.getBottom(), false);
         g.setGradientFill (cap);
         g.fillEllipse (face);
         const auto capInset = face.reduced (1.5f);
@@ -252,6 +259,29 @@ public:
                                       juce::Colour (0xFFCCC0A6), capInset.getRight(), capInset.getBottom(), false);
         g.setGradientFill (capCore);
         g.fillEllipse (capInset);
+        // Modulation amounts opt into a domed cap.  The highlight and the
+        // terminator stay inside the face, so the row height does not change.
+        if (slider.getProperties().getWithDefault ("eon.raised", false))
+        {
+            const auto dome = capInset.reduced (radius * 0.16f);
+            juce::ColourGradient domeLight (brassCap ? juce::Colour (0xFFFFE7A8).withAlpha (0.70f)
+                                                      : juce::Colour (0xFFFFF6E4).withAlpha (0.55f),
+                                            dome.getX(), dome.getY(),
+                                            brassCap ? juce::Colour (0xFF6B4A1C).withAlpha (0.0f)
+                                                     : juce::Colour (0xFF8C7350).withAlpha (0.0f),
+                                            dome.getRight(), dome.getBottom(), true);
+            g.setGradientFill (domeLight);
+            g.fillEllipse (dome);
+            g.setColour (juce::Colours::black.withAlpha (0.18f));
+            juce::Path terminator;
+            terminator.addCentredArc (capInset.getCentreX(), capInset.getCentreY(),
+                                       capInset.getWidth() * 0.42f, capInset.getHeight() * 0.42f,
+                                       0.0f,
+                                       0.15f * juce::MathConstants<float>::pi,
+                                       0.85f * juce::MathConstants<float>::pi, true);
+            g.strokePath (terminator, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
+                                                            juce::PathStrokeType::rounded));
+        }
         // Specular bloom on the lit shoulder, and a terminator on the dark one.
         const auto drawShoulderArc = [&g] (const juce::Rectangle<float>& bounds,
                                           float startAngle, float endAngle,
@@ -286,7 +316,8 @@ public:
             const float t = static_cast<float> (tick) / 10.0f;
             const float angle = rotaryStartAngle + t * (rotaryEndAngle - rotaryStartAngle);
             const bool major = tick % 2 == 0;
-            const auto tickOuter = pointOnRing (angle, radius + 3.0f);
+            const float tickReach = juce::jmin (radius + 3.0f, (float) width * 0.5f - 1.5f);
+            const auto tickOuter = pointOnRing (angle, tickReach);
             const auto tickInner = pointOnRing (angle, radius + (major ? -0.8f : 1.0f));
             g.setColour (juce::Colour (0xffe8d9b8).withAlpha (major ? 0.62f : 0.34f));
             g.drawLine (tickOuter.x, tickOuter.y, tickInner.x, tickInner.y, major ? 1.0f : 0.65f);
@@ -298,7 +329,7 @@ public:
         juce::Path arc;
         arc.addCentredArc (cx, cy, radius + 1.2f, radius + 1.2f,
                            0.0f, rotaryStartAngle, valueAngle, true);
-        g.setColour (juce::Colour (0xfff0d9a8).withAlpha (0.50f));
+        g.setColour ((brassCap ? juce::Colour (0xfff6d78c) : juce::Colour (0xfff0d9a8)).withAlpha (brassCap ? 0.85f : 0.50f));
         g.strokePath (arc, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
                                                   juce::PathStrokeType::rounded));
 
@@ -311,7 +342,8 @@ public:
         g.setColour (juce::Colour (0xff241d16));
         g.drawLine (centre.x, centre.y, pointer.x, pointer.y, 2.2f);
 
-        const auto caption = juce::Rectangle<int> (x + 1, y + height - 17, width - 2, 16);
+        const auto caption = juce::Rectangle<int> (x + 1, y + height - (int) captionHeight,
+                                                    width - 2, (int) captionHeight - 2);
         const bool isAdjusting = slider.getProperties().getWithDefault ("eon.dragging", false);
         const auto text = isAdjusting ? slider.getTextFromValue (slider.getValue()).toUpperCase()
                                       : slider.getName();
@@ -345,6 +377,7 @@ private:
     std::array<juce::Slider, 4> oscLevel, oscCoarse, oscFine, oscPhase, oscPan, oscPulseWidth;
     juce::Slider noiseMix, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, voiceVariance, attack, decay, sustain, release, envCurve, filterAttack, filterDecay, filterSustain, filterRelease, filterEnvAmount, cutoff, resonance, filterDrive, gain, drive, ampSaturation;
     juce::Slider lfoRate, lfoDepth, lfoPitch, velocityAmount;
+    std::array<juce::Slider, 4> modAmount;
     juce::Slider fxWet, delayTime, delayFeedback, delayStereo, chorusDepth, chorusRate, chorusMix, reverbMix, reverbModulation;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> osc1Attachment, osc2Attachment, osc3Attachment, osc4Attachment, modeAttachment, filterModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> oversamplingAttachment;
@@ -354,10 +387,14 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, voiceVarianceAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, envCurveAttachment, cutoffAttachment, resonanceAttachment, filterDriveAttachment, gainAttachment, driveAttachment, ampSatAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filterAttackAttachment, filterDecayAttachment, filterSustainAttachment, filterReleaseAttachment, filterEnvAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoDepthAttachment, lfoPitchAttachment, velocityAttachment;
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 4> modAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxWetAttachment, delayTimeAttachment, delayFeedbackAttachment, delayStereoAttachment, chorusDepthAttachment, chorusRateAttachment, chorusMixAttachment, reverbMixAttachment, reverbModulationAttachment;
     float meterLeft = 0.0f, meterRight = 0.0f;
     // Cached wood cabinet: the grain needs hundreds of thin strokes to read
     // as wood, so it is rasterised on resize instead of every paint().
     juce::Image woodCache;
+    // Declared after the sliders so it is destroyed first and cannot repaint
+    // a control that has already gone.
+    CoalescedRepaint knobCaptionRefresh;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EonMiniEEFEditor)
 };
