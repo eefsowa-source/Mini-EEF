@@ -22,6 +22,11 @@ public:
     // docs/superpowers/specs/2026-09-30-dial-grade-adr.md for the reasoning.
     enum DialGrade { compact = 0, standard = 1, primary = 2 };
 
+    static constexpr float dialDiameter (int grade) noexcept
+    {
+        return grade == compact ? 40.0f : grade == primary ? 62.0f : 50.0f;
+    }
+
     static constexpr float captionBand = 18.0f;
 
     static constexpr int dialRowHeight (int grade) noexcept

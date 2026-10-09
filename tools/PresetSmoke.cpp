@@ -1239,9 +1239,10 @@ int main()
         }
     }
 
-    // Only Note On/Off and velocity are part of the instrument contract.  All
-    // other channel messages must be ignored and therefore must not alter the
-    // rendered samples.
+    // Note On/Off, pitch wheel, and sustain are the instrument contract.  The
+    // wheel at 8192 is a fixed x1 ratio, so it must not move rendered samples;
+    // mod wheel, aftertouch, and channel pressure stay ignored.  CC64 is not
+    // sent here because sustain legitimately defers release.
     EonMiniEEFProcessor notesOnlyProbe, extraMidiProbe;
     notesOnlyProbe.prepareToPlay (48000.0, 128);
     extraMidiProbe.prepareToPlay (48000.0, 128);
@@ -1250,11 +1251,10 @@ int main()
     notesOnlyMidi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
     notesOnlyMidi.addEvent (juce::MidiMessage::noteOff (1, 60), 96);
     extraMidi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
-    extraMidi.addEvent (juce::MidiMessage::pitchWheel (1, 16383), 16);
+    extraMidi.addEvent (juce::MidiMessage::pitchWheel (1, 8192), 16);
     extraMidi.addEvent (juce::MidiMessage::controllerEvent (1, 1, 127), 24);
     extraMidi.addEvent (juce::MidiMessage::aftertouchChange (1, 60, 127), 28);
     extraMidi.addEvent (juce::MidiMessage::channelPressureChange (1, 127), 32);
-    extraMidi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 40);
     extraMidi.addEvent (juce::MidiMessage::noteOff (1, 60), 96);
     notesOnlyProbe.processBlock (notesOnlyBuffer, notesOnlyMidi);
     extraMidiProbe.processBlock (extraMidiBuffer, extraMidi);

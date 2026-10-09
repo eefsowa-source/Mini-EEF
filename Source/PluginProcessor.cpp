@@ -1381,9 +1381,8 @@ private:
             {
                 stopAllVoicesImmediatelyNoLock();
                 auto* sound = sounds.isEmpty() ? nullptr : sounds.getUnchecked (0).get();
-                auto* voice = startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
+                startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
                             message.getFloatVelocity());
-                juce::ignoreUnused (voice);
                 applyPitchBendNoLock (channel);
                 return;
             }
