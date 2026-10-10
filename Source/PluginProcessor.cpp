@@ -93,9 +93,13 @@ namespace
             case 1: // PolyBLEP pulse
             {
                 const float width = juce::jlimit (0.05f, 0.95f, pulseWidth);
+                // phase+1-width lands in (0.05, 1.95), so the wrap needs at
+                // most one subtract and a compare replaces the fmod.
+                float widthPhase = phase + 1.0f - width;
+                if (widthPhase >= 1.0f) widthPhase -= 1.0f;
                 return (phase < width ? 1.0f : -1.0f)
                      + blep (phase, dt)
-                     - blep (std::fmod (phase + 1.0f - width, 1.0f), dt);
+                     - blep (widthPhase, dt);
             }
 
             case 2: // Symmetric triangle; continuous at both turning points
@@ -114,10 +118,10 @@ namespace
         }
     }
 
-    float processTptSvf (float input, float g, float damping, float denominator,
+    float processTptSvf (float input, float g, float damping, float invDenominator,
                          int filterMode, float& ic1, float& ic2) noexcept
     {
-        const float v1 = (g * (input - ic2) + ic1) / denominator;
+        const float v1 = (g * (input - ic2) + ic1) * invDenominator;
         const float v2 = ic2 + g * v1;
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
@@ -576,7 +580,6 @@ public:
         auto* lfoDivision = p.apvts.getRawParameterValue (ParamIDs::lfoDivision);
         auto* lfoShape = p.apvts.getRawParameterValue (ParamIDs::lfoShape);
         auto* unisonDriftParam = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
-        auto* keyTracking = p.apvts.getRawParameterValue (ParamIDs::keyTracking);
         auto* envCurveParam = p.apvts.getRawParameterValue (ParamIDs::envCurve);
         auto* filterEnvAmountParam = p.apvts.getRawParameterValue (ParamIDs::filterEnvAmount);
         std::array<std::atomic<float>*, 4> modSourceParams {}, modDestinationParams {}, modAmountParams {};
@@ -619,6 +622,82 @@ public:
             ? juce::jlimit (-1.0f, 1.0f, filterEnvAmountParam->load()) : 0.0f;
         const int activeUnisonVoices = juce::jlimit (1, maxUnisonVoices,
             juce::roundToInt (unisonVoicesParam->load()));
+        // Everything below depends only on block-constant parameters, so it
+        // is resolved once per block instead of once per sample.  Each moved
+        // value previously re-ran a parameter load, a branch, or a
+        // transcendental numSamples times for a result that could not change
+        // inside the loop.
+        const float srF = static_cast<float> (sr);
+        const float invSr = 1.0f / srF;
+        const float nyquist = 0.49f * srF;
+        const float invNyquist = 1.0f / nyquist;
+        const float unisonScale = 1.0f / static_cast<float> (activeUnisonVoices);
+        // Reciprocals: 1 ulp off the division result, accepted trade for
+        // removing four-hot divides per sample in the unison loop.
+        const float invUnisonSpan = activeUnisonVoices > 1
+            ? 1.0f / static_cast<float> (activeUnisonVoices - 1) : 0.0f;
+        const float lfoPitchAmount = lfoPitch->load();
+        const float lfoDepthAmount = lfoDepth->load();
+        const float velocityGain = juce::jlimit (0.0f, 1.0f,
+            (1.0f - velocityAmount->load()) + velocityAmount->load() * vel);
+        const int wave1 = static_cast<int> (std::lround (w1->load()));
+        const int wave2 = static_cast<int> (std::lround (w2->load()));
+        const int wave3 = w3 != nullptr ? static_cast<int> (std::lround (w3->load())) : 0;
+        const int wave4 = w4 != nullptr ? static_cast<int> (std::lround (w4->load())) : 0;
+        std::array<float, 4> coarseSemitones {};
+        for (size_t oscillator = 0; oscillator < 4; ++oscillator)
+            coarseSemitones[oscillator] = juce::jlimit (-24.0f, 24.0f,
+                coarseParams[oscillator]->load());
+        // Layer geometry is fixed for the whole block; only the drift term
+        // inside cents moves per sample.
+        std::array<float, maxUnisonVoices> layerPosition {}, layerPositionNorm {};
+        for (int unison = 0; unison < activeUnisonVoices; ++unison)
+        {
+            layerPosition[static_cast<size_t> (unison)] = static_cast<float> (unison)
+                - 0.5f * static_cast<float> (activeUnisonVoices - 1);
+            layerPositionNorm[static_cast<size_t> (unison)] = activeUnisonVoices > 1
+                ? (2.0f * layerPosition[static_cast<size_t> (unison)]
+                    * invUnisonSpan) : 0.0f;
+        }
+        // The mod matrix's source/destination/amount choices are parameter
+        // state, so they are decoded here.  Oscillator 1 as an audio-rate FM
+        // source only ever feeds destination 4, and that sum is
+        // block-constant too; per sample the loop only multiplies the
+        // surviving slots by the current source value.  Slots that can
+        // contribute only +-0 (source 0, destination 0, amount 0) are marked
+        // inactive, which leaves the accumulators bit-identical.
+        std::array<int, 4> modSourceIndex {}, modDestinationIndex {};
+        std::array<float, 4> modSlotAmount {};
+        float osc1FmSum = 0.0f;
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const auto index = static_cast<size_t> (slot);
+            if (modSourceParams[index] == nullptr
+                || modDestinationParams[index] == nullptr
+                || modAmountParams[index] == nullptr)
+                continue;
+            const int source = juce::jlimit (0, 5, juce::roundToInt (modSourceParams[index]->load()));
+            const int destination = juce::jlimit (0, 5, juce::roundToInt (modDestinationParams[index]->load()));
+            const float amount = juce::jlimit (-1.0f, 1.0f, modAmountParams[index]->load());
+            if (source == 4)
+            {
+                if (destination == 4)
+                    osc1FmSum += 0.5f * amount;
+                continue;
+            }
+            modSourceIndex[index] = source;
+            modDestinationIndex[index] = destination;
+            modSlotAmount[index] = amount;
+        }
+        const float osc1FmAmount = juce::jlimit (-0.5f, 0.5f, osc1FmSum);
+        // Value-keyed caches: the pitch ratios only re-run exp2f when the
+        // smoothed input actually moved.  Both start from an impossible key
+        // so the first sample always evaluates.
+        std::array<float, 4> lastSemitones { 1.0e30f, 1.0e30f, 1.0e30f, 1.0e30f };
+        std::array<float, 4> semitoneRatio {};
+        std::array<float, maxUnisonVoices> lastLayerCents {};
+        std::array<float, maxUnisonVoices> layerDetuneRatio {};
+        lastLayerCents.fill (1.0e30f);
         for (int i = 0; i < numSamples; ++i)
         {
             const float unisonDetuneCents = juce::jlimit (0.0f, 24.0f,
@@ -653,7 +732,10 @@ public:
                 lfo = std::sin (juce::MathConstants<float>::twoPi * lfoPhase);
             }
             previousLfoPhase = lfoPhase;
-            lfoPhase = std::fmod (lfoPhase + lfoStep, 1.0f);
+            // lfoStep is clamped well under 1.0, so the phase can cross the
+            // wrap point at most once and a compare replaces the fmod.
+            lfoPhase += lfoStep;
+            if (lfoPhase >= 1.0f) lfoPhase -= 1.0f;
             const float rawEnvelope = env.getNextSample();
             const float envelope = shapeEnvelope (rawEnvelope, ampEnvelopeState, sustainLevel);
             ampEnvelopeState.previousRaw = rawEnvelope;
@@ -662,26 +744,19 @@ public:
                                                         filterSustainLevel);
             filterEnvelopeState.previousRaw = rawFilterEnvelope;
             float matrixPitch = 0.0f, matrixCutoff = 0.0f, matrixAmp = 0.0f,
-                  matrixFm = 0.0f, matrixPwm = 0.0f, osc1FmAmount = 0.0f;
+                  matrixFm = 0.0f, matrixPwm = 0.0f;
             for (int slot = 0; slot < 4; ++slot)
             {
-                if (modSourceParams[static_cast<size_t> (slot)] == nullptr
-                    || modDestinationParams[static_cast<size_t> (slot)] == nullptr
-                    || modAmountParams[static_cast<size_t> (slot)] == nullptr)
+                const auto index = static_cast<size_t> (slot);
+                // Slots that could only contribute +-0 were left at zero when
+                // the matrix was decoded per block.
+                const int destination = modDestinationIndex[index];
+                if (destination == 0 || modSourceIndex[index] == 0
+                    || modSlotAmount[index] == 0.0f)
                     continue;
-                const int source = juce::jlimit (0, 5, juce::roundToInt (modSourceParams[static_cast<size_t> (slot)]->load()));
-                const int destination = juce::jlimit (0, 5, juce::roundToInt (modDestinationParams[static_cast<size_t> (slot)]->load()));
-                const float amount = juce::jlimit (-1.0f, 1.0f, modAmountParams[static_cast<size_t> (slot)]->load());
-                // Oscillator 1 is an audio-rate source and is handled in the
-                // oscillator loop below to provide bounded phase modulation.
-                if (source == 4)
-                {
-                    if (destination == 4)
-                        osc1FmAmount += 0.5f * amount;
-                    continue;
-                }
-                const float sourceValue = modulationSourceValue (source, lfo, envelope, vel,
-                                                                 filterEnvelope);
+                const float sourceValue = modulationSourceValue (modSourceIndex[index], lfo,
+                                                                 envelope, vel, filterEnvelope);
+                const float amount = modSlotAmount[index];
                 switch (destination)
                 {
                     case 1: matrixPitch += 12.0f * amount * sourceValue; break;
@@ -699,14 +774,17 @@ public:
             // Pulse width is clamped again per oscillator below, so this only
             // needs to keep the modulation itself inside a sane band.
             matrixPwm = juce::jlimit (-0.45f, 0.45f, matrixPwm);
-            osc1FmAmount = juce::jlimit (-0.5f, 0.5f, osc1FmAmount);
-            const float modulatedFrequency = baseFrequency * std::exp2f (matrixPitch / 12.0f)
-                * std::exp2f (lfo * lfoPitch->load() / 12.0f)
+            // exp2f(0) is exactly 1, so an inactive modulation keeps its slot
+            // in the product without running the transcendental.
+            const float lfoPitchSemis = lfo * lfoPitchAmount;
+            const float modulatedFrequency =
+                (matrixPitch != 0.0f
+                    ? baseFrequency * std::exp2f (matrixPitch / 12.0f) : baseFrequency)
+                * (lfoPitchSemis != 0.0f ? std::exp2f (lfoPitchSemis / 12.0f) : 1.0f)
                 * pitchVarianceRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
             // behaviour instead of phase folding on the very top notes.
-            const float nyquist = 0.49f * static_cast<float> (sr);
             std::array<float, 4> oscillatorFrequency {}, oscillatorLevel {}, oscillatorPan {}, oscillatorPulseWidth {};
             // Resolved once per sample rather than inside the oscillator: the
             // Analog wave's soft-clip drive depends only on the pulse width,
@@ -714,10 +792,15 @@ public:
             std::array<float, 4> analogDrive {};
             for (size_t oscillator = 0; oscillator < 4; ++oscillator)
             {
-                const float semitones = juce::jlimit (-24.0f, 24.0f, coarseParams[oscillator]->load())
-                                      + juce::jlimit (-100.0f, 100.0f, fineSmooth[oscillator].getNextValue()) / 100.0f;
+                const float semitones = coarseSemitones[oscillator]
+                                      + juce::jlimit (-100.0f, 100.0f, fineSmooth[oscillator].getNextValue()) * 0.01f;
+                if (semitones != lastSemitones[oscillator])
+                {
+                    lastSemitones[oscillator] = semitones;
+                    semitoneRatio[oscillator] = std::exp2f (semitones / 12.0f);
+                }
                 oscillatorFrequency[oscillator] = juce::jmax (0.01f,
-                    modulatedFrequency * std::exp2f (semitones / 12.0f));
+                    modulatedFrequency * semitoneRatio[oscillator]);
                 oscillatorLevel[oscillator] = juce::jlimit (0.0f, 1.0f, levelSmooth[oscillator].getNextValue());
                 oscillatorPan[oscillator] = juce::jlimit (-1.0f, 1.0f, panSmooth[oscillator].getNextValue());
                 // The PWM matrix destination rides on top of the per-oscillator
@@ -728,27 +811,20 @@ public:
                     * (0.5f - std::abs (oscillatorPulseWidth[oscillator] - 0.5f));
             }
             const float baseCutoff = cutoffSmooth.getNextValue();
-            const float keyTrack = juce::jlimit (0.0f, 1.0f,
-                keyTracking != nullptr ? keyTracking->load() : 0.0f);
             // The key-tracking ratio depends only on the held note, so it is
             // resolved once in startNote rather than exp2'd every sample.
             const float keyRatio = keyRatioForNote;
             const float modulatedCutoff = juce::jlimit (20.0f, 20000.0f,
                 baseCutoff * cutoffVariance * keyRatio
-                * (1.0f + lfo * lfoDepth->load() + matrixCutoff)
+                * (1.0f + lfo * lfoDepthAmount + matrixCutoff)
                 * filterEnvGain (filterEnvelope));
-            const int wave1 = static_cast<int> (std::lround (w1->load()));
-            const int wave2 = static_cast<int> (std::lround (w2->load()));
-            const int wave3 = w3 != nullptr ? static_cast<int> (std::lround (w3->load())) : 0;
-            const int wave4 = w4 != nullptr ? static_cast<int> (std::lround (w4->load())) : 0;
             float unisonLeft = 0.0f;
             float unisonRight = 0.0f;
             for (int unison = 0; unison < activeUnisonVoices; ++unison)
             {
                 // The control is the outer-to-outer detune in cents, split
                 // symmetrically around the played pitch.
-                const float position = static_cast<float> (unison)
-                                      - 0.5f * static_cast<float> (activeUnisonVoices - 1);
+                const float position = layerPosition[static_cast<size_t> (unison)];
                 // Deterministic random walk toward +/-1 around the static
                 // detune. One-pole smoothing keeps the motion in the "analog
                 // slow drift" band instead of flutter.
@@ -756,16 +832,21 @@ public:
                     * driftValue[static_cast<size_t> (unison)];
                 const float cents = activeUnisonVoices > 1
                     ? (position + drift * (0.5f + 0.5f * std::abs (position)))
-                        * unisonDetuneCents
-                        / static_cast<float> (activeUnisonVoices - 1)
+                        * unisonDetuneCents * invUnisonSpan
                     : drift * driftDetuneFallbackCents;
-                const float ratio = std::exp2f (juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
+                const auto layer = static_cast<size_t> (unison);
+                if (cents != lastLayerCents[layer])
+                {
+                    lastLayerCents[layer] = cents;
+                    layerDetuneRatio[layer] = std::exp2f (juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
+                }
+                const float ratio = layerDetuneRatio[layer];
                 std::array<float, 4> increment {};
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
                     const float requestedFrequency = oscillatorFrequency[oscillator] * ratio;
                     increment[oscillator] = juce::jmin (requestedFrequency, nyquist)
-                                          / static_cast<float> (sr);
+                                          * invSr;
                 }
                 auto& phase1 = ph1[static_cast<size_t> (unison)];
                 auto& phase2 = ph2[static_cast<size_t> (unison)];
@@ -847,11 +928,8 @@ public:
                 oscillatorRight = (oscillatorRight + noiseRight * 0.70710678f) * oscillatorBusGain;
                 // Equal-power-ish gains with a unity centre preserve the old
                 // mono result at spread=0 while keeping wide layers bounded.
-                const float positionNorm = activeUnisonVoices > 1
-                    ? (2.0f * position / static_cast<float> (activeUnisonVoices - 1)) : 0.0f;
                 const float pan = juce::jlimit (-1.0f, 1.0f,
-                    positionNorm * unisonSpreadAmount);
-                const auto layer = static_cast<size_t> (unison);
+                    layerPositionNorm[layer] * unisonSpreadAmount);
                 if (! unisonPanCacheValid[layer] || cachedUnisonPanValue[layer] != pan)
                 {
                     const float panAngle = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
@@ -887,11 +965,8 @@ public:
                     + driftLevel * 0.0004f
                         * (unitRandomFromState (levelDriftState[static_cast<size_t> (unison)]) - 0.5f));
             }
-            const float unisonScale = 1.0f / static_cast<float> (activeUnisonVoices);
             unisonLeft *= unisonScale;
             unisonRight *= unisonScale;
-            const float velocityGain = juce::jlimit (0.0f, 1.0f,
-                (1.0f - velocityAmount->load()) + velocityAmount->load() * vel);
             // Dedicated LFO AM depth.  At full depth the carrier is reduced
             // to zero at the negative LFO peak, while depth=0 is bit-identical
             // to the previous signal path.
@@ -906,7 +981,7 @@ public:
             // (at 0.45*Nyquist the bilinear warp already compresses the audible
             // top octave) while the resonance self-peak stays tame.
             const float safeCutoff = juce::jlimit (20.0f,
-                juce::jmin (20000.0f, 0.40f * static_cast<float> (sr)), modulatedCutoff);
+                juce::jmin (20000.0f, 0.40f * srF), modulatedCutoff);
             const float resonanceAmount = juce::jlimit (0.0f, 1.0f,
                 resonanceSmooth.getNextValue());
             const float damping = juce::jlimit (0.08f, 2.0f,
@@ -922,23 +997,26 @@ public:
             // the filter drive is active, two half-rate updates reduce
             // coefficient warping and sample the drive non-linearity at
             // twice the host rate, halving the fold depth of its products.
-            const bool filterOversample = safeCutoff > 0.28f * static_cast<float> (sr)
+            const bool filterOversample = safeCutoff > 0.28f * srF
                                        || resonanceAmount > 0.72f
                                        || filterDriveActive;
             const float filterRate = filterOversample
-                ? 2.0f * static_cast<float> (sr) : static_cast<float> (sr);
+                ? 2.0f * srF : srF;
             const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff / filterRate);
-            const float denominator = 1.0f + g * (g + damping);
+            // The SVF divides by this once per stage per channel; the
+            // reciprocal is computed once per sample instead (1 ulp change).
+            const float invDenominator = 1.0f / (1.0f + g * (g + damping));
             // LPF24 cascades a second flat TPT stage (damping 2.0) behind the
             // resonant stage: 24 dB/oct rolloff with the resonance still owned
             // by stage one.  Each stage stays the proven unconditionally
             // stable TPT integrator, so no new stability envelope is needed.
-            const float cascadeDenominator = 1.0f + g * (g + 2.0f);
+            const float invCascadeDenominator = 1.0f / (1.0f + g * (g + 2.0f));
             const int selectedFilter = filterMode != nullptr
                 ? juce::jlimit (0, 3, juce::roundToInt (filterMode->load())) : 0;
             const int stageOneMode = selectedFilter == 3 ? 0 : selectedFilter;
             const float filterDriveGain = 1.0f + 5.0f * filterDriveAmount;
             const float filterDriveNorm = std::tanh (filterDriveGain);
+            const float invFilterDriveNorm = 1.0f / filterDriveNorm;
             const std::array<float, 2> stereoInput { unisonLeft, unisonRight };
             const int channels = juce::jmin (2, buffer.getNumChannels());
             for (int channel = 0; channel < channels; ++channel)
@@ -963,23 +1041,23 @@ public:
                 if (filterDriveActive)
                 {
                     firstStepInput = std::tanh (0.5f * (x + filterInputPrev[index])
-                                                * filterDriveGain) / filterDriveNorm;
-                    secondStepInput = std::tanh (x * filterDriveGain) / filterDriveNorm;
+                                                * filterDriveGain) * invFilterDriveNorm;
+                    secondStepInput = std::tanh (x * filterDriveGain) * invFilterDriveNorm;
                 }
                 filterInputPrev[index] = x;
-                float filtered = processTptSvf (firstStepInput, g, damping, denominator,
+                float filtered = processTptSvf (firstStepInput, g, damping, invDenominator,
                                                 stageOneMode,
                                                 svfIc1[index], svfIc2[index]);
                 if (selectedFilter == 3)
-                    filtered = processTptSvf (filtered, g, 2.0f, cascadeDenominator, 0,
+                    filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
                                               svfIc3[index], svfIc4[index]);
                 if (filterOversample)
                 {
-                    filtered = processTptSvf (secondStepInput, g, damping, denominator,
+                    filtered = processTptSvf (secondStepInput, g, damping, invDenominator,
                                               stageOneMode,
                                               svfIc1[index], svfIc2[index]);
                     if (selectedFilter == 3)
-                        filtered = processTptSvf (filtered, g, 2.0f, cascadeDenominator, 0,
+                        filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
                                                   svfIc3[index], svfIc4[index]);
                 }
                 state[index] = filtered;
