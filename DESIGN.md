@@ -22,6 +22,11 @@
   cutoff/resonance smoothing
 - 보이스별 필터 드라이브(tanh, 기본 0=레거시 비트 동일). 드라이브가 켜지면
   선택적 2x 서브스텝 안에서 비선형을 호스트 레이트의 2배로 평가한다
+- 아날로그 에이징(unisonDrift>0에서 활성): 보이스별 느린 피치 방황,
+  노트온 ~30 ms 피치 정착, 오실레이터 위상 자유 유지(free-run),
+  -68 dB 노이즈 플로어. drift=0에서는 전부 0 기여라 레거시와 비트 동일
+- 공진 노브 상단(resonance>0.9)에서 댐핑이 0.02까지 내려가 자기발진
+  근처의 휘파람 공명을 허용. res≤0.9는 기존과 비트 동일
 - 내부 drive, chorus/delay/reverb, DC blocker, soft limiter, peak meter
 - 1x/2x/4x oversampling 선택 (drive nonlinear stage)
 - APVTS 파라미터와 project/preset 상태 XML 저장

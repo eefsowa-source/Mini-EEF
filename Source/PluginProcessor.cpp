@@ -388,11 +388,30 @@ public:
         {
             // Layer zero retains the old phase. Other layers receive stable,
             // independent offsets so retriggering remains deterministic.
-            ph1[static_cast<size_t> (i)] = std::fmod (phaseStart[0] + 0.173f * i * phaseScale, 1.0f);
-            ph2[static_cast<size_t> (i)] = std::fmod (phaseStart[1] + 0.311f * i * phaseScale, 1.0f);
-            ph3[static_cast<size_t> (i)] = std::fmod (phaseStart[2] + 0.457f * i * phaseScale, 1.0f);
-            ph4[static_cast<size_t> (i)] = std::fmod (phaseStart[3] + 0.619f * i * phaseScale, 1.0f);
+            if (driftLevel <= 1.0e-6f)
+            {
+                ph1[static_cast<size_t> (i)] = std::fmod (phaseStart[0] + 0.173f * i * phaseScale, 1.0f);
+                ph2[static_cast<size_t> (i)] = std::fmod (phaseStart[1] + 0.311f * i * phaseScale, 1.0f);
+                ph3[static_cast<size_t> (i)] = std::fmod (phaseStart[2] + 0.457f * i * phaseScale, 1.0f);
+                ph4[static_cast<size_t> (i)] = std::fmod (phaseStart[3] + 0.619f * i * phaseScale, 1.0f);
+            }
         }
+        // drift>0 keeps the running phase instead: free-running VCOs do not
+        // restart at a fixed phase on every note, which is what makes
+        // analog retrigger attacks vary.
+        // Per-voice pitch wander and note-on settle, seeded from the same
+        // note chain as the other wanderers so renders stay reproducible.
+        pitchDriftState = noiseState ^ 0x5bf03635u;
+        if (pitchDriftState == 0)
+            pitchDriftState = 0x6d2b79f5u;
+        hissState = noiseState ^ 0x2c1b3c6du;
+        if (hissState == 0)
+            hissState = 0x6d2b79f5u;
+        pitchDriftValue = 0.0f;
+        // The settle is a one-shot pitch offset that decays away over ~30 ms,
+        // the VCO warm-up smear that softens analog note starts.
+        pitchSettleCents = driftLevel * 6.0f
+            * (2.0f * unitRandomFromState (pitchDriftState) - 1.0f);
         // Per-layer drift wanderers restart from the same deterministic seed
         // chain as the noise source, so offline renders stay reproducible.
         for (int i = 0; i < maxUnisonVoices; ++i)
@@ -484,6 +503,8 @@ public:
         levelDriftValue.fill (0.0f);
         noiseState = 0x6d2b79f5u;
         noiseStateRight = 0x6d2b79f5u;
+        pitchDriftValue = 0.0f;
+        pitchSettleCents = 0.0f;
         varianceAmount = 0.0f;
         cutoffVariance = 1.0f;
         envelopeVariance = 1.0f;
@@ -698,6 +719,10 @@ public:
         std::array<float, maxUnisonVoices> lastLayerCents {};
         std::array<float, maxUnisonVoices> layerDetuneRatio {};
         lastLayerCents.fill (1.0e30f);
+        // ~30 ms one-pole for the VCO settle transient.
+        const float pitchSettleDecay = 1.0f - 1.0f / (0.03f * srF);
+        // -68 dB board hiss at drift=1; zero drift adds exactly +0.0.
+        const float hissLevel = driftLevel * 3.9811e-4f;
         for (int i = 0; i < numSamples; ++i)
         {
             const float unisonDetuneCents = juce::jlimit (0.0f, 24.0f,
@@ -774,6 +799,18 @@ public:
             // Pulse width is clamped again per oscillator below, so this only
             // needs to keep the modulation itself inside a sane band.
             matrixPwm = juce::jlimit (-0.45f, 0.45f, matrixPwm);
+            // Per-voice aging: a slow pitch random walk plus the decaying
+            // note-on settle.  drift=0 leaves both terms at exactly 0, so the
+            // ratio is 1.0 and the product below stays bit-identical.  The
+            // linear cents-to-ratio form is intentional: this path is a
+            // musical modulation, not a calibrated conversion.
+            pitchDriftValue = juce::jlimit (-1.0f, 1.0f,
+                pitchDriftValue + driftLevel * 0.00025f
+                    * (unitRandomFromState (pitchDriftState) - 0.5f));
+            pitchSettleCents *= pitchSettleDecay;
+            const float voicePitchRatio = 1.0f
+                + (pitchDriftValue * driftLevel * 8.0f + pitchSettleCents)
+                  * 0.0005777897f;
             // exp2f(0) is exactly 1, so an inactive modulation keeps its slot
             // in the product without running the transcendental.
             const float lfoPitchSemis = lfo * lfoPitchAmount;
@@ -781,7 +818,7 @@ public:
                 (matrixPitch != 0.0f
                     ? baseFrequency * std::exp2f (matrixPitch / 12.0f) : baseFrequency)
                 * (lfoPitchSemis != 0.0f ? std::exp2f (lfoPitchSemis / 12.0f) : 1.0f)
-                * pitchVarianceRatio;
+                * pitchVarianceRatio * voicePitchRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
             // behaviour instead of phase folding on the very top notes.
@@ -967,6 +1004,9 @@ public:
             }
             unisonLeft *= unisonScale;
             unisonRight *= unisonScale;
+            // Board hiss floor, independent draws for left and right.
+            unisonLeft += hissLevel * whiteNoiseSample (hissState);
+            unisonRight += hissLevel * whiteNoiseSample (hissState);
             // Dedicated LFO AM depth.  At full depth the carrier is reduced
             // to zero at the negative LFO peak, while depth=0 is bit-identical
             // to the previous signal path.
@@ -984,8 +1024,12 @@ public:
                 juce::jmin (20000.0f, 0.40f * srF), modulatedCutoff);
             const float resonanceAmount = juce::jlimit (0.0f, 1.0f,
                 resonanceSmooth.getNextValue());
-            const float damping = juce::jlimit (0.08f, 2.0f,
-                2.0f - 1.92f * resonanceAmount);
+            // Resonance at or below 0.9 keeps the legacy damping bit-for-bit;
+            // the top of the knob eases toward self-oscillation, which is
+            // where analog filters get their whistle.
+            const float damping = juce::jlimit (0.02f, 2.0f,
+                2.0f - 1.92f * resonanceAmount
+                - 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f));
             // Dedicated per-voice filter drive: a bounded tanh colouration
             // evaluated inside the selective 2x path below.  Zero keeps the
             // legacy filter input bit-identical.
@@ -1182,6 +1226,10 @@ private:
     // noise seed, both seeded from the same deterministic note chain.
     std::array<float, maxUnisonVoices> levelDriftValue {};
     std::array<std::uint32_t, maxUnisonVoices> levelDriftState {};
+    // Per-voice aging wander, gated on the drift amount: a slow pitch walk
+    // plus a brief settle transient after note-on, and a noise-floor state.
+    float pitchDriftValue = 0.0f, pitchSettleCents = 0.0f;
+    std::uint32_t pitchDriftState = 0x6d2b79f5u, hissState = 0x6d2b79f5u;
     std::uint32_t sahState = 0x6d2b79f5u;
     static float unitRandomFromState (std::uint32_t& stateValue) noexcept
     {

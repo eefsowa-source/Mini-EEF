@@ -50,6 +50,9 @@ int main (int argc, char** argv)
     }
 
     juce::WavAudioFormat wav;
+    // FileOutputStream writes without truncating, so a stale longer file
+    // would leave old samples behind; delete first for repeatable output.
+    out.deleteFile();
     auto stream = out.createOutputStream();
     if (stream == nullptr)
     {
