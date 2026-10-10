@@ -286,6 +286,7 @@ public:
         svfIc3.fill (0.0f);
         svfIc4.fill (0.0f);
         filterInputPrev.fill (0.0f);
+        resLpState.fill (0.0f);
         // Key tracking depends only on the held note, so its exponential is
         // evaluated here rather than once per sample inside the render loop.
         {
@@ -489,6 +490,7 @@ public:
         svfIc3.fill (0.0f);
         svfIc4.fill (0.0f);
         filterInputPrev.fill (0.0f);
+        resLpState.fill (0.0f);
         panCacheValid.fill (false);
         unisonPanCacheValid.fill (false);
         ph1.fill (0.0f);
@@ -723,6 +725,8 @@ public:
         const float pitchSettleDecay = 1.0f - 1.0f / (0.03f * srF);
         // -68 dB board hiss at drift=1; zero drift adds exactly +0.0.
         const float hissLevel = driftLevel * 3.9811e-4f;
+        // ~40 Hz one-pole behind the resonance bass-loss emulation.
+        const float resLossLpCoeff = juce::MathConstants<float>::twoPi * 40.0f / srF;
         for (int i = 0; i < numSamples; ++i)
         {
             const float unisonDetuneCents = juce::jlimit (0.0f, 24.0f,
@@ -1061,6 +1065,13 @@ public:
             const float filterDriveGain = 1.0f + 5.0f * filterDriveAmount;
             const float filterDriveNorm = std::tanh (filterDriveGain);
             const float invFilterDriveNorm = 1.0f / filterDriveNorm;
+            // Analog ladders lose passband level as Q rises.  Emulated as a
+            // high-pass into the filter input (the low-passed complement is
+            // subtracted), active only above resonance 0.9 where the whistle
+            // already lives and only on the low-pass modes.  res<=0.9 leaves
+            // filterX == x bit-for-bit.
+            const float resBassLoss = (stageOneMode == 0)
+                ? 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f) : 0.0f;
             const std::array<float, 2> stereoInput { unisonLeft, unisonRight };
             const int channels = juce::jmin (2, buffer.getNumChannels());
             for (int channel = 0; channel < channels; ++channel)
@@ -1075,20 +1086,22 @@ public:
                                          p.selectedDriveCurve())
                     : filterInput;
                 const size_t index = static_cast<size_t> (channel);
+                resLpState[index] += resLossLpCoeff * (x - resLpState[index]);
+                const float filterX = x - resBassLoss * resLpState[index];
                 // With filter drive active the two sub-steps evaluate the
                 // curve on linear-interpolated inputs (midpoint, endpoint) so
                 // the non-linearity is sampled at twice the host rate.
                 // Without drive both steps share the input, preserving the
                 // established half-step filter behaviour bit-for-bit.
-                float firstStepInput = x;
-                float secondStepInput = x;
+                float firstStepInput = filterX;
+                float secondStepInput = filterX;
                 if (filterDriveActive)
                 {
-                    firstStepInput = std::tanh (0.5f * (x + filterInputPrev[index])
+                    firstStepInput = std::tanh (0.5f * (filterX + filterInputPrev[index])
                                                 * filterDriveGain) * invFilterDriveNorm;
-                    secondStepInput = std::tanh (x * filterDriveGain) * invFilterDriveNorm;
+                    secondStepInput = std::tanh (filterX * filterDriveGain) * invFilterDriveNorm;
                 }
-                filterInputPrev[index] = x;
+                filterInputPrev[index] = filterX;
                 float filtered = processTptSvf (firstStepInput, g, damping, invDenominator,
                                                 stageOneMode,
                                                 svfIc1[index], svfIc2[index]);
@@ -1243,6 +1256,9 @@ private:
     // by the drive midpoint evaluation.  Both reset with the legacy states.
     std::array<float, 2> svfIc3 {}, svfIc4 {};
     std::array<float, 2> filterInputPrev {};
+    // Low-pass state for the resonance bass-loss high-pass emulation,
+    // per channel like the SVF integrators.
+    std::array<float, 2> resLpState {};
     std::uint32_t noiseState = 0x6d2b79f5u;
     std::uint32_t noiseStateRight = 0x6d2b79f5u;
     // Roadmap P2 per-voice tolerance.  The three multipliers stay at exactly

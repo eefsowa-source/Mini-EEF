@@ -16,6 +16,10 @@ drift=0 patch stays bit-identical:
   the summed unison output before the filter.
 - Resonance whistle: damping floor lowered from 0.08 to 0.02 with an extra
   term that only engages above resonance 0.9 (res<=0.9 bit-identical).
+- Resonance bass loss (Tier 2): above resonance 0.9 and on the low-pass
+  modes only, the filter input is high-passed at ~40 Hz with a
+  res-proportional mix (up to 0.06 at res=1), approximating the passband
+  loss of a resonating ladder.  res<=0.9 leaves filterX == x bit-for-bit.
 
 Tooling: RenderWav now deletes the output file before writing —
 juce::File::createOutputStream does not truncate, so repeated renders were
@@ -33,6 +37,15 @@ concatenating RIFFs.
 - python3 scripts/run_dsp_sanity.py PASS.
 - CpuProbe 400: worst case 48.30% vs 48.23% before this change (+0.07pp,
   the wander/hiss cost at drift=0 is two xorshift draws per sample).
+
+## Deployed
+
+- VST3 -> ~/Library/Audio/Plug-Ins/VST3/EEF-JP8000.vst3, binary SHA256
+  4b6c27ba16d29ffe038cdc3b866152927bfe36fbf2faf94752a1dabbfe45837a
+- AU   -> ~/Library/Audio/Plug-Ins/Components/EEF-JP8000.component, binary
+  SHA256 a056d16aeaeb655b5805693dc9c42f2613b9a43374cf1e6c25eeb811d47806df
+- pluginval strictness 5 SUCCESS on this binary; auval -v aumu MnEf EonA
+  AU VALIDATION SUCCEEDED.
 
 ## Not done / risk
 
