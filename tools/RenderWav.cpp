@@ -21,6 +21,18 @@ int main (int argc, char** argv)
     processor.prepareToPlay (sampleRate, blockSize);
     FactoryPresets::apply (processor, preset);
 
+    // Optional "paramId=plainValue" overrides, e.g. resonance=0.95
+    for (int a = 3; a < argc; ++a)
+    {
+        const juce::String arg (argv[a]);
+        const auto eq = arg.indexOfChar ('=');
+        if (eq <= 0)
+            continue;
+        if (auto* parameter = processor.apvts.getParameter (arg.substring (0, eq)))
+            parameter->setValueNotifyingHost (
+                parameter->convertTo0to1 (arg.substring (eq + 1).getFloatValue()));
+    }
+
     juce::MidiBuffer midi;
     const double noteOn = 0.15, noteDur = 0.9;
     const std::array<int, 4> notes { 48, 55, 60, 67 };

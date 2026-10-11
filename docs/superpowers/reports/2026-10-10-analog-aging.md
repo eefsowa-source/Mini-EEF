@@ -23,7 +23,23 @@ drift=0 patch stays bit-identical:
 
 Tooling: RenderWav now deletes the output file before writing —
 juce::File::createOutputStream does not truncate, so repeated renders were
-concatenating RIFFs.
+concatenating RIFFs.  RenderWav also accepts paramId=plainValue overrides
+as extra argv entries (e.g. resonance=0.97 cutoff=3000).
+
+## Verification of the new branches (2026-10-11)
+
+No factory preset reaches resonance > 0.9 or exercises the whistle path, so
+the new branches were rendered with overrides on preset 0:
+
+- res=0.95 / res=0.97, cutoff=3000: output stays finite and bounded.  A
+  Goertzel measurement at the cutoff in the release tail shows the
+  resonant component rising from 0.00017 (res 0.89) to 0.00047 (res 0.97),
+  ~2.7x for the damping change 0.08 -> ~0.05.  Whistle is present but
+  restrained; a true self-oscillation whistle needs the drive to keep
+  feeding the filter.
+- drift=0.5 on preset 0: render differs massively as designed; hiss is
+  below the signal floor (in-band, ~-74 dBFS at drift 0.5) and only exists
+  while a voice sounds, so it cannot be isolated in a silent window.
 
 ## Evidence
 
