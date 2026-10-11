@@ -119,9 +119,18 @@ namespace
     }
 
     float processTptSvf (float input, float g, float damping, float invDenominator,
-                         int filterMode, float& ic1, float& ic2) noexcept
+                         int filterMode, float& ic1, float& ic2,
+                         bool saturate = false) noexcept
     {
-        const float v1 = (g * (input - ic2) + ic1) * invDenominator;
+        float v1 = (g * (input - ic2) + ic1) * invDenominator;
+        // Ladder-style stage saturation: the band state itself soft-clips,
+        // which is what makes a driven resonant filter growl instead of just
+        // getting louder.  Off by default so drive-free patches are unchanged.
+        if (saturate)
+        {
+            const float v12 = v1 * v1;
+            v1 = v1 * (27.0f + v12) / (27.0f + 9.0f * v12);
+        }
         const float v2 = ic2 + g * v1;
         ic1 = 2.0f * v1 - ic1;
         ic2 = 2.0f * v2 - ic2;
@@ -1120,7 +1129,7 @@ public:
                 filterInputPrev[index] = filterX;
                 float filtered = processTptSvf (firstStepInput, g, damping, invDenominator,
                                                 stageOneMode,
-                                                svfIc1[index], svfIc2[index]);
+                                                svfIc1[index], svfIc2[index], filterDriveActive);
                 if (selectedFilter == 3)
                     filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
                                               svfIc3[index], svfIc4[index]);
@@ -1128,7 +1137,7 @@ public:
                 {
                     filtered = processTptSvf (secondStepInput, g, damping, invDenominator,
                                               stageOneMode,
-                                              svfIc1[index], svfIc2[index]);
+                                              svfIc1[index], svfIc2[index], filterDriveActive);
                     if (selectedFilter == 3)
                         filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
                                                   svfIc3[index], svfIc4[index]);

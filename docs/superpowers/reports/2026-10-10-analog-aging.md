@@ -76,6 +76,33 @@ Deployed (2026-10-11, sub-osc build):
 - AU binary SHA256 6cd047f7c62f9492e051a90f03da4d9fc4523c42be8f2395560216ab8742e42c
 - pluginval strictness 5 SUCCESS on this binary.
 
+## 2026-10-11 addendum — ladder-style stage saturation (filter drive)
+
+### What changed
+
+- processTptSvf gained an opt-in saturate flag: the band state v1 passes
+  through a rational soft-clip v1*(27+v1^2)/(27+9*v1^2) before the
+  integrator update.  This is the Moog-ladder trick — the resonance itself
+  compresses, so a driven filter growls instead of just getting louder.
+- Wired only into the stage-one calls, gated on filterDriveActive
+  (filterDrive > 0).  The LPF24 cascade stage stays clean.  Drive-free
+  patches execute the identical code path.
+- Aliasing: filterDriveActive already forces the 2x half-step path
+  (filterOversample), so the non-linearity is sampled at twice the host
+  rate, same as the existing input tanh.
+
+### Evidence
+
+- Drive-free presets p0/p5/p14/p20/p25/p30 renders bit-identical to the
+  pre-change snapshots (/tmp/eef-t2 vs /tmp/eef-sat, 582120 bytes each).
+- p26 (minimoog lead, the only factory preset with filterDrive=0.22):
+  peak 0.2232 -> 0.1942, RMS 0.0477 -> 0.0471, finite, max diff 0.048 —
+  the soft-clip eats the resonance-ring overshoot, which is the point.
+- ctest 4/4 PASS, dsp-sanity PASS, pluginval strictness 5 SUCCESS,
+  auval -v aumu MnEf EonA PASS.
+- Deployed: VST3 SHA256 91ea8bc0ce4ae815ebeda2ee896fdfafb634bddea7b08eec2284aeeceb47a37d
+  AU SHA256 88e1be20f5d14eedb4e0cd500b22b5cc9234b072f1aae602a8b3c89c3effc76e.
+
 ## Not done / risk
 
 - No A/B listening yet — Ableton gate still blocked (Mac locked).  The
