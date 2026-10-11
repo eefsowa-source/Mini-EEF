@@ -103,6 +103,43 @@ Deployed (2026-10-11, sub-osc build):
 - Deployed: VST3 SHA256 91ea8bc0ce4ae815ebeda2ee896fdfafb634bddea7b08eec2284aeeceb47a37d
   AU SHA256 88e1be20f5d14eedb4e0cd500b22b5cc9234b072f1aae602a8b3c89c3effc76e.
 
+## 2026-10-11 addendum 2 — osc sync, crosstalk, BBD chorus
+
+### What changed
+
+- New oscSync parameter (SYNC knob): a master wrap inside the sample
+  interval pulls the slave's phase toward zero at the wrap point —
+  hard sync at 1.0, imperfect board coupling below it.  Slave pairs are
+  osc2 -> osc1 and osc4 -> osc3.  The step height is measured on the raw
+  shape (new rawOscillatorSample helper — waveforms 2-4 have no internal
+  blep), and the PolyBLEP residual splits across the two samples the
+  step straddles via a per-layer syncPending term.  Default 0 leaves
+  every phase advance and every render bit-identical.
+- Osc crosstalk, gated on driftLevel: rendered oscillators leak into the
+  summing node at -42 dB (0.008 * driftLevel) through a level floor, so
+  muted oscillators on an "aged" board never fully vanish.  Only
+  evaluated oscillators can leak — the mute-skip CPU saving is
+  untouched; drift=0 keeps the mix bit-identical.
+- BBD chorus, gated on unisonDrift: the wet path passes a ~4.2 kHz
+  one-pole low-pass and the delay input is soft-clipped (tanh of
+  dry * 1.3), the bucket-brigade signature of a Juno-class chorus.
+  Filter states track the signal while the gate is closed so engaging
+  never thumps; drift=0 is bit-identical.
+
+### Evidence
+
+- oscSync=0 renders bit-identical for every tested preset.
+  oscSync=1.0 on preset 0: engages, finite, same peak ceiling as the
+  unsynced render (6.9999 both, the pre-existing transient limit).
+- drift=0 presets p0/p5/p20/p25/p26 bit-identical.  drift>0 presets
+  p14/p30 differ by design: max diff 0.035/0.016, RMS +3.1%/+1.2%
+  (crosstalk floor + BBD colour), finite.
+- ctest 4/4 PASS, dsp-sanity PASS, pluginval strictness 5 SUCCESS,
+  auval -v aumu MnEf EonA PASS.
+- Deployed: VST3 SHA256 b04f587c1a5452be1ca3f5a3d91b2de0319cb17e93531efa45228188121aab8a
+  AU SHA256 66371b15f41eb3f86adeffd3e2cae45f6521562c1e205d800df1d664c0c3d62b.
+
+
 ## Not done / risk
 
 - No A/B listening yet — Ableton gate still blocked (Mac locked).  The

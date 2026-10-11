@@ -90,6 +90,11 @@ private:
     std::array<float, chorusBufferLength> chorusBufferL {}, chorusBufferR {};
     int chorusWritePosition = 0;
     double chorusLfoPhase = 0.0;
+    // BBD (bucket-brigade) colour for the chorus wet path, gated on
+    // unisonDrift: bandwidth-limiting one-pole states plus an input soft
+    // clip applied at the buffer write.  They track the signal while the
+    // gate is off so engaging never thumps.
+    float chorusBbdLpL = 0.0f, chorusBbdLpR = 0.0f;
     // Sample-rate ramps avoid zipper modulation when chorus controls are
     // automated while keeping the state allocation-free in processBlock.
     juce::SmoothedValue<float> chorusDepthSmooth, chorusRateSmooth, chorusMixSmooth;

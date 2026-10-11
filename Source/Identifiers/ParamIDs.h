@@ -33,6 +33,11 @@ inline constexpr auto noiseMix = "noiseMix";
 // Monophonic-style sub oscillator: a 50% square one octave below oscillator
 // 1, summed into the pre-filter mix.  Zero keeps the mix bit-identical.
 inline constexpr auto subOscLevel = "subOscLevel";
+// Oscillator sync: oscillator 2 is pulled to oscillator 1's reset, and
+// oscillator 4 to oscillator 3's.  The value is the pull strength, so 1.0 is
+// classic hard sync and lower values behave like the imperfect coupling of
+// a real voice card.  Zero leaves every phase advance untouched.
+inline constexpr auto oscSync = "oscSync";
 // Neutral defaults (one layer, zero cents) preserve legacy presets.
 inline constexpr auto unisonVoices = "unisonVoices";
 inline constexpr auto unisonDetune = "unisonDetune";

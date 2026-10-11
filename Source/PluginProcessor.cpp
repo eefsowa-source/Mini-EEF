@@ -118,6 +118,24 @@ namespace
         }
     }
 
+    // The same shapes without any band-limit correction, for measuring the
+    // height of a sync step discontinuity.  Waveforms 2-4 have no internal
+    // blep, so they reuse oscillatorSample's math by construction.
+    float rawOscillatorSample (float phase, int waveform, float pulseWidth,
+                               float analogDrive) noexcept
+    {
+        phase = phase - std::floor (phase);
+        switch (juce::jlimit (0, 4, waveform))
+        {
+            case 0: return 2.0f * phase - 1.0f;
+            case 1: return phase < juce::jlimit (0.05f, 0.95f, pulseWidth) ? 1.0f : -1.0f;
+            case 2: return 1.0f - 4.0f * std::abs (phase - 0.5f);
+            case 3: return std::sin (juce::MathConstants<float>::twoPi * phase);
+            case 4: return analogOscillatorSample (phase, analogDrive);
+            default: return 2.0f * phase - 1.0f;
+        }
+    }
+
     float processTptSvf (float input, float g, float damping, float invDenominator,
                          int filterMode, float& ic1, float& ic2,
                          bool saturate = false) noexcept
@@ -391,6 +409,7 @@ public:
         driveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::drive, 0.0f));
         filterDriveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::filterDrive, 0.0f));
         noiseSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::noiseMix, 0.0f));
+        oscSyncSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::oscSync, 0.0f));
         unisonDetuneSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::unisonDetune, 0.0f));
         unisonSpreadSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::unisonSpread, 0.0f));
         amDepthSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::amDepth, 0.0f));
@@ -507,6 +526,8 @@ public:
         ph2.fill (0.0f);
         ph3.fill (0.0f);
         ph4.fill (0.0f);
+        syncPending2.fill (0.0f);
+        syncPending4.fill (0.0f);
         lfoPhase = 0.0f;
         previousLfoPhase = 0.0f;
         lfoSample = 0.0f;
@@ -538,6 +559,7 @@ public:
         driveSmooth.reset (newSampleRate, 0.005);
         filterDriveSmooth.reset (newSampleRate, 0.005);
         noiseSmooth.reset (newSampleRate, 0.005);
+        oscSyncSmooth.reset (newSampleRate, 0.005);
         unisonDetuneSmooth.reset (newSampleRate, 0.005);
         unisonSpreadSmooth.reset (newSampleRate, 0.005);
         amDepthSmooth.reset (newSampleRate, 0.005);
@@ -547,6 +569,7 @@ public:
         driveSmooth.setCurrentAndTargetValue (0.0f);
         filterDriveSmooth.setCurrentAndTargetValue (0.0f);
         noiseSmooth.setCurrentAndTargetValue (0.0f);
+        oscSyncSmooth.setCurrentAndTargetValue (0.0f);
         unisonDetuneSmooth.setCurrentAndTargetValue (0.0f);
         unisonSpreadSmooth.setCurrentAndTargetValue (0.0f);
         amDepthSmooth.setCurrentAndTargetValue (0.0f);
@@ -597,6 +620,7 @@ public:
         }
         auto* noiseMixParam = p.apvts.getRawParameterValue (ParamIDs::noiseMix);
         auto* subOscParam = p.apvts.getRawParameterValue (ParamIDs::subOscLevel);
+        auto* oscSyncParam = p.apvts.getRawParameterValue (ParamIDs::oscSync);
         auto* unisonVoicesParam = p.apvts.getRawParameterValue (ParamIDs::unisonVoices);
         auto* unisonDetuneParam = p.apvts.getRawParameterValue (ParamIDs::unisonDetune);
         auto* unisonSpreadParam = p.apvts.getRawParameterValue (ParamIDs::unisonSpread);
@@ -634,6 +658,7 @@ public:
         driveSmooth.setTargetValue (drive->load());
         filterDriveSmooth.setTargetValue (filterDriveParam != nullptr ? filterDriveParam->load() : 0.0f);
         noiseSmooth.setTargetValue (noiseMixParam != nullptr ? noiseMixParam->load() : 0.0f);
+        oscSyncSmooth.setTargetValue (oscSyncParam != nullptr ? oscSyncParam->load() : 0.0f);
         unisonDetuneSmooth.setTargetValue (unisonDetuneParam->load());
         unisonSpreadSmooth.setTargetValue (unisonSpreadParam != nullptr ? unisonSpreadParam->load() : 0.0f);
         amDepthSmooth.setTargetValue (amDepthParam != nullptr ? amDepthParam->load() : 0.0f);
@@ -873,6 +898,14 @@ public:
                 baseCutoff * cutoffVariance * keyRatio
                 * (1.0f + lfo * lfoDepthAmount + matrixCutoff)
                 * filterEnvGain (filterEnvelope));
+            const float syncAmount = juce::jlimit (0.0f, 1.0f,
+                oscSyncSmooth.getNextValue());
+            // Voice-card crosstalk: a rendered oscillator still leaks into the
+            // summing node at about -42 dB even with its level down, which is
+            // why muted oscillators on an aging board never fully vanish.
+            // Only oscillators that were evaluated can leak, so the mute-skip
+            // saving above is untouched; drift=0 keeps the old mix.
+            const float crosstalk = driftLevel > 1.0e-6f ? 0.008f * driftLevel : 0.0f;
             float unisonLeft = 0.0f;
             float unisonRight = 0.0f;
             for (int unison = 0; unison < activeUnisonVoices; ++unison)
@@ -908,6 +941,36 @@ public:
                 auto& phase3 = ph3[static_cast<size_t> (unison)];
                 auto& phase4 = ph4[static_cast<size_t> (unison)];
                 const float osc1Phase = phase1;
+                // Oscillator sync: a master wrap inside this interval pulls
+                // the slave's phase toward zero at the wrap point — hard sync
+                // at oscSync = 1, the imperfect coupling of a real voice card
+                // below it.  a<0 means no reset lands in this sample.  The
+                // step height is measured on the raw (unblepped) shape, and
+                // the PolyBLEP residual splits across the two samples the
+                // step straddles: the pre-step half lands here, the rest via
+                // syncPending.
+                const float a2 = syncAmount > 1.0e-6f
+                              && phase1 + increment[0] >= 1.0f
+                    ? (1.0f - phase1) / increment[0] : -1.0f;
+                const float a4 = syncAmount > 1.0e-6f
+                              && phase3 + increment[2] >= 1.0f
+                    ? (1.0f - phase3) / increment[2] : -1.0f;
+                float step2 = 0.0f, postPhase2 = 0.0f;
+                if (a2 >= 0.0f)
+                {
+                    const float pre = std::fmod (phase2 + increment[1] * a2, 1.0f);
+                    postPhase2 = pre * (1.0f - syncAmount);
+                    step2 = rawOscillatorSample (pre, wave2, oscillatorPulseWidth[1], analogDrive[1])
+                          - rawOscillatorSample (postPhase2, wave2, oscillatorPulseWidth[1], analogDrive[1]);
+                }
+                float step4 = 0.0f, postPhase4 = 0.0f;
+                if (a4 >= 0.0f)
+                {
+                    const float pre = std::fmod (phase4 + increment[3] * a4, 1.0f);
+                    postPhase4 = pre * (1.0f - syncAmount);
+                    step4 = rawOscillatorSample (pre, wave4, oscillatorPulseWidth[3], analogDrive[3])
+                          - rawOscillatorSample (postPhase4, wave4, oscillatorPulseWidth[3], analogDrive[3]);
+                }
                 // A muted oscillator still advances its phase further down, so
                 // its waveform evaluation can be skipped outright.  With the
                 // default patch three of the four sit at level 0, which makes
@@ -921,7 +984,7 @@ public:
                                         oscillatorPulseWidth[0], analogDrive[0])
                     : 0.0f;
                 const float osc2Phase = phase2 + matrixFm + osc1 * osc1FmAmount;
-                const std::array<float, 4> samples {
+                std::array<float, 4> samples {
                     osc1,
                     oscillatorLevel[1] > 1.0e-6f
                         ? oscillatorSample (osc2Phase, increment[1], wave2,
@@ -936,12 +999,20 @@ public:
                                             oscillatorPulseWidth[3], analogDrive[3])
                         : 0.0f
                 };
+                // Half of the sync-step residual belongs to this (pre-step)
+                // sample; the pending half of a step one interval ago arrives
+                // here the same way.  Zero on both terms adds exactly +0.0.
+                samples[1] += syncPending2[layer]
+                    + 0.5f * step2 * (1.0f - a2) * (1.0f - a2);
+                samples[3] += syncPending4[layer]
+                    + 0.5f * step4 * (1.0f - a4) * (1.0f - a4);
                 float oscillatorLeft = 0.0f, oscillatorRight = 0.0f;
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
                     // A muted oscillator contributed only a zero sample, so the
                     // mix can skip its pan lookup and Nyquist fade entirely.
                     if (oscillatorLevel[oscillator] <= 1.0e-6f
+                        && crosstalk <= 0.0f
                         && !(oscillator == 0 && osc1Audible))
                         continue;
                     // Reuse the cached equal-power gains unless this
@@ -963,8 +1034,9 @@ public:
                     const float frequencyRatio = oscillatorFrequency[oscillator] * ratio / nyquist;
                     const float nyquistGain = 1.0f - juce::jlimit (0.0f, 1.0f,
                         (frequencyRatio - 0.8f) / 0.2f);
-                    oscillatorLeft += samples[oscillator] * oscillatorLevel[oscillator] * left * nyquistGain;
-                    oscillatorRight += samples[oscillator] * oscillatorLevel[oscillator] * right * nyquistGain;
+                    const float effectiveLevel = juce::jmax (oscillatorLevel[oscillator], crosstalk);
+                    oscillatorLeft += samples[oscillator] * effectiveLevel * left * nyquistGain;
+                    oscillatorRight += samples[oscillator] * effectiveLevel * right * nyquistGain;
                 }
                 // Independent right-channel noise: the two sides no longer
                 // carry the identical sample, which is what gave the noise
@@ -1016,9 +1088,32 @@ public:
                 // layers this is 32 fmod calls per sample, the widest
                 // transcendental in the voice.
                 phase1 += increment[0]; if (phase1 >= 1.0f) phase1 -= 1.0f;
-                phase2 += increment[1]; if (phase2 >= 1.0f) phase2 -= 1.0f;
+                if (a2 >= 0.0f)
+                {
+                    // Reset at the master's wrap point: the slave restarts
+                    // from the pulled phase and runs out the remainder of
+                    // the interval from there.
+                    phase2 = postPhase2 + increment[1] * (1.0f - a2);
+                    if (phase2 >= 1.0f) phase2 -= 1.0f;
+                    syncPending2[layer] = -0.5f * step2 * a2 * a2;
+                }
+                else
+                {
+                    phase2 += increment[1]; if (phase2 >= 1.0f) phase2 -= 1.0f;
+                    syncPending2[layer] = 0.0f;
+                }
                 phase3 += increment[2]; if (phase3 >= 1.0f) phase3 -= 1.0f;
-                phase4 += increment[3]; if (phase4 >= 1.0f) phase4 -= 1.0f;
+                if (a4 >= 0.0f)
+                {
+                    phase4 = postPhase4 + increment[3] * (1.0f - a4);
+                    if (phase4 >= 1.0f) phase4 -= 1.0f;
+                    syncPending4[layer] = -0.5f * step4 * a4 * a4;
+                }
+                else
+                {
+                    phase4 += increment[3]; if (phase4 >= 1.0f) phase4 -= 1.0f;
+                    syncPending4[layer] = 0.0f;
+                }
                 phSub[static_cast<size_t> (unison)] += increment[0] * 0.5f;
                 if (phSub[static_cast<size_t> (unison)] >= 1.0f)
                     phSub[static_cast<size_t> (unison)] -= 1.0f;
@@ -1299,6 +1394,7 @@ private:
     juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
                                unisonDetuneSmooth, unisonSpreadSmooth, amDepthSmooth;
     juce::SmoothedValue<float> filterDriveSmooth;
+    juce::SmoothedValue<float> oscSyncSmooth;
     // Envelope curve state shared by the amp and filter envelopes
     // (roadmap P1.2/P1.3).
     EnvelopeCurveState ampEnvelopeState {}, filterEnvelopeState {};
@@ -1323,6 +1419,9 @@ private:
     // The sub oscillator tracks oscillator 1 at -1 octave.  It shares the
     // free-run rule: seeded deterministically, kept running under drift.
     std::array<float, maxUnisonVoices> phSub {};
+    // Post-step PolyBLEP residual each synced slave owes the sample after a
+    // master reset.  Zero unless oscSync is engaged.
+    std::array<float, maxUnisonVoices> syncPending2 {}, syncPending4 {};
 };
 struct EonSound:juce::SynthesiserSound{bool appliesToNote(int)override{return true;}bool appliesToChannel(int)override{return true;}};
 struct NoteOnlySynthesiser final : juce::Synthesiser
@@ -1569,6 +1668,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
                    ParamIDs::osc4Phase, ParamIDs::osc4Pan, ParamIDs::osc4PulseWidth, 0.0f, 0.0f);
     addFloat (ParamIDs::noiseMix, 0.0f, 1.0f, 0.0f);
     addFloat (ParamIDs::subOscLevel, 0.0f, 1.0f, 0.0f);
+    addFloat (ParamIDs::oscSync, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterInt> (
         ParamIDs::unisonVoices, "Unison Voices", 1, 8, 1));
     addFloat (ParamIDs::unisonDetune, 0.0f, 24.0f, 0.0f);
@@ -1860,6 +1960,8 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         chorusBufferR.fill (0.0f);
         chorusWritePosition = 0;
         chorusLfoPhase = 0.0;
+        chorusBbdLpL = 0.0f;
+        chorusBbdLpR = 0.0f;
         const auto resetChorusSmoother = [this] (juce::SmoothedValue<float>& smoother,
                                                   const char* id, float fallback) noexcept
         {
@@ -2048,8 +2150,33 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             }
             chorusWetL *= 1.0f / 2.8f;
             chorusWetR *= 1.0f / 2.8f;
-            chorusBufferL[(size_t) chorusWritePosition] = dryL;
-            chorusBufferR[(size_t) chorusWritePosition] = dryR;
+            // BBD colour, gated on the same unisonDrift "board age" control
+            // as the voice-card quirks: a bucket-brigade delay bandwidth-
+            // limits the wet signal to a few kHz and soft-clips on the way
+            // in.  While the gate is closed the states track the wet signal,
+            // so engaging never thumps.
+            const bool chorusBbd = value (ParamIDs::unisonDrift, 0.0f) > 1.0e-5f;
+            if (chorusBbd)
+            {
+                const float bbdLpCoeff = 1.0f - std::exp (
+                    -juce::MathConstants<float>::twoPi * 4200.0f
+                    / (float) sampleRate);
+                chorusBbdLpL += bbdLpCoeff * (chorusWetL - chorusBbdLpL);
+                chorusBbdLpR += bbdLpCoeff * (chorusWetR - chorusBbdLpR);
+                chorusWetL = chorusBbdLpL;
+                chorusWetR = chorusBbdLpR;
+            }
+            else
+            {
+                chorusBbdLpL = chorusWetL;
+                chorusBbdLpR = chorusWetR;
+            }
+            // The BBD's input stage compands: loud transients land on the
+            // chip's soft knee instead of the rail.
+            chorusBufferL[(size_t) chorusWritePosition]
+                = chorusBbd ? std::tanh (dryL * 1.3f) : dryL;
+            chorusBufferR[(size_t) chorusWritePosition]
+                = chorusBbd ? std::tanh (dryR * 1.3f) : dryR;
             chorusWritePosition = (chorusWritePosition + 1) % chorusBufferLength;
             chorusLfoPhase = std::fmod (chorusLfoPhase
                 + juce::MathConstants<double>::twoPi * (double) rate / sampleRate,
