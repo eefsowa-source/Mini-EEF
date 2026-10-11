@@ -27,6 +27,9 @@
   -68 dB 노이즈 플로어. drift=0에서는 전부 0 기여라 레거시와 비트 동일
 - 공진 노브 상단(resonance>0.9)에서 댐핑이 0.02까지 내려가 자기발진
   근처의 휘파람 공명을 허용. res≤0.9는 기존과 비트 동일
+- 서브 오실레이터(subOscLevel, 기본 0=비트 동일): oscillator 1의 -1옥
+  50% square가 레이어별로 프리필터 믹스에 센터로 합산. 위상은 다른
+  오실레이터와 같은 seed/free-run 규칙을 따른다
 - 내부 drive, chorus/delay/reverb, DC blocker, soft limiter, peak meter
 - 1x/2x/4x oversampling 선택 (drive nonlinear stage)
 - APVTS 파라미터와 project/preset 상태 XML 저장

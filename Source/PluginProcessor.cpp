@@ -395,6 +395,7 @@ public:
                 ph2[static_cast<size_t> (i)] = std::fmod (phaseStart[1] + 0.311f * i * phaseScale, 1.0f);
                 ph3[static_cast<size_t> (i)] = std::fmod (phaseStart[2] + 0.457f * i * phaseScale, 1.0f);
                 ph4[static_cast<size_t> (i)] = std::fmod (phaseStart[3] + 0.619f * i * phaseScale, 1.0f);
+                phSub[static_cast<size_t> (i)] = std::fmod (phaseStart[0] + 0.173f * i * phaseScale, 1.0f);
             }
         }
         // drift>0 keeps the running phase instead: free-running VCOs do not
@@ -503,6 +504,7 @@ public:
         driftLevel = 0.0f;
         driftValue.fill (0.0f);
         levelDriftValue.fill (0.0f);
+        phSub.fill (0.0f);
         noiseState = 0x6d2b79f5u;
         noiseStateRight = 0x6d2b79f5u;
         pitchDriftValue = 0.0f;
@@ -585,6 +587,7 @@ public:
             pulseWidthSmooth[oscillator].setTargetValue (pulseWidthParams[oscillator]->load());
         }
         auto* noiseMixParam = p.apvts.getRawParameterValue (ParamIDs::noiseMix);
+        auto* subOscParam = p.apvts.getRawParameterValue (ParamIDs::subOscLevel);
         auto* unisonVoicesParam = p.apvts.getRawParameterValue (ParamIDs::unisonVoices);
         auto* unisonDetuneParam = p.apvts.getRawParameterValue (ParamIDs::unisonDetune);
         auto* unisonSpreadParam = p.apvts.getRawParameterValue (ParamIDs::unisonSpread);
@@ -663,6 +666,8 @@ public:
         const float lfoDepthAmount = lfoDepth->load();
         const float velocityGain = juce::jlimit (0.0f, 1.0f,
             (1.0f - velocityAmount->load()) + velocityAmount->load() * vel);
+        const float subOscLevel = subOscParam != nullptr
+            ? juce::jlimit (0.0f, 1.0f, subOscParam->load()) : 0.0f;
         const int wave1 = static_cast<int> (std::lround (w1->load()));
         const int wave2 = static_cast<int> (std::lround (w2->load()));
         const int wave3 = w3 != nullptr ? static_cast<int> (std::lround (w3->load())) : 0;
@@ -961,6 +966,14 @@ public:
                 // in the sequence.
                 const float noise = noiseMix * whiteNoiseSample (noiseState);
                 const float noiseRight = noiseMix * whiteNoiseSample (noiseStateRight);
+                // Sub square tracks oscillator 1 one octave down, panned
+                // centre.  subOscLevel 0 contributes exactly +0.0.
+                const float sub = subOscLevel
+                    * oscillatorSample (phSub[static_cast<size_t> (unison)],
+                                        increment[0] * 0.5f, 1, 0.5f,
+                                        analogDrive[0]);
+                oscillatorLeft += sub;
+                oscillatorRight += sub;
                 // A fixed conservative bus gain preserves each Level knob's
                 // meaning.  Dividing by the sum of active levels made one
                 // oscillator sound equally loud at every non-zero setting.
@@ -997,6 +1010,9 @@ public:
                 phase2 += increment[1]; if (phase2 >= 1.0f) phase2 -= 1.0f;
                 phase3 += increment[2]; if (phase3 >= 1.0f) phase3 -= 1.0f;
                 phase4 += increment[3]; if (phase4 >= 1.0f) phase4 -= 1.0f;
+                phSub[static_cast<size_t> (unison)] += increment[0] * 0.5f;
+                if (phSub[static_cast<size_t> (unison)] >= 1.0f)
+                    phSub[static_cast<size_t> (unison)] -= 1.0f;
                 driftValue[static_cast<size_t> (unison)] += driftLevel
                     * 0.0003f * (unitRandomFromState (driftState[static_cast<size_t> (unison)]) - 0.5f);
                 driftValue[static_cast<size_t> (unison)] = juce::jlimit (-1.0f, 1.0f,
@@ -1295,6 +1311,9 @@ private:
     std::array<float, maxUnisonVoices> cachedUnisonPanValue {};
     std::array<bool, maxUnisonVoices> unisonPanCacheValid {};
     std::array<float, maxUnisonVoices> ph1 {}, ph2 {}, ph3 {}, ph4 {};
+    // The sub oscillator tracks oscillator 1 at -1 octave.  It shares the
+    // free-run rule: seeded deterministically, kept running under drift.
+    std::array<float, maxUnisonVoices> phSub {};
 };
 struct EonSound:juce::SynthesiserSound{bool appliesToNote(int)override{return true;}bool appliesToChannel(int)override{return true;}};
 struct NoteOnlySynthesiser final : juce::Synthesiser
@@ -1540,6 +1559,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addOscillator (ParamIDs::osc4Level, ParamIDs::osc4Coarse, ParamIDs::osc4Fine,
                    ParamIDs::osc4Phase, ParamIDs::osc4Pan, ParamIDs::osc4PulseWidth, 0.0f, 0.0f);
     addFloat (ParamIDs::noiseMix, 0.0f, 1.0f, 0.0f);
+    addFloat (ParamIDs::subOscLevel, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterInt> (
         ParamIDs::unisonVoices, "Unison Voices", 1, 8, 1));
     addFloat (ParamIDs::unisonDetune, 0.0f, 24.0f, 0.0f);

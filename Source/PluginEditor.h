@@ -343,7 +343,7 @@ private:
     juce::TextButton initButton { "INIT" }, saveButton { "SAVE" }, loadButton { "LOAD" };
     std::unique_ptr<juce::FileChooser> fileChooser;
     std::array<juce::Slider, 4> oscLevel, oscCoarse, oscFine, oscPhase, oscPan, oscPulseWidth;
-    juce::Slider noiseMix, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, voiceVariance, attack, decay, sustain, release, envCurve, filterAttack, filterDecay, filterSustain, filterRelease, filterEnvAmount, cutoff, resonance, filterDrive, gain, drive, ampSaturation;
+    juce::Slider noiseMix, subOscLevel, amDepth, unisonVoices, unisonDetune, unisonSpread, unisonPhase, unisonDrift, voiceVariance, attack, decay, sustain, release, envCurve, filterAttack, filterDecay, filterSustain, filterRelease, filterEnvAmount, cutoff, resonance, filterDrive, gain, drive, ampSaturation;
     juce::Slider lfoRate, lfoDepth, lfoPitch, velocityAmount;
     juce::Slider fxWet, delayTime, delayFeedback, delayStereo, chorusDepth, chorusRate, chorusMix, reverbMix, reverbModulation;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> osc1Attachment, osc2Attachment, osc3Attachment, osc4Attachment, modeAttachment, filterModeAttachment;
@@ -351,7 +351,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> driveCurveAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoShapeAttachment;
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 4> oscLevelAttachment, oscCoarseAttachment, oscFineAttachment, oscPhaseAttachment, oscPanAttachment, oscPulseWidthAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, voiceVarianceAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, envCurveAttachment, cutoffAttachment, resonanceAttachment, filterDriveAttachment, gainAttachment, driveAttachment, ampSatAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> noiseMixAttachment, subOscLevelAttachment, amDepthAttachment, unisonVoicesAttachment, unisonDetuneAttachment, unisonSpreadAttachment, unisonPhaseAttachment, unisonDriftAttachment, voiceVarianceAttachment, attackAttachment, decayAttachment, sustainAttachment, releaseAttachment, envCurveAttachment, cutoffAttachment, resonanceAttachment, filterDriveAttachment, gainAttachment, driveAttachment, ampSatAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> filterAttackAttachment, filterDecayAttachment, filterSustainAttachment, filterReleaseAttachment, filterEnvAmountAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> lfoRateAttachment, lfoDepthAttachment, lfoPitchAttachment, velocityAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxWetAttachment, delayTimeAttachment, delayFeedbackAttachment, delayStereoAttachment, chorusDepthAttachment, chorusRateAttachment, chorusMixAttachment, reverbMixAttachment, reverbModulationAttachment;

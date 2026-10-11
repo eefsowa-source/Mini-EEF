@@ -20,6 +20,13 @@ drift=0 patch stays bit-identical:
   modes only, the filter input is high-passed at ~40 Hz with a
   res-proportional mix (up to 0.06 at res=1), approximating the passband
   loss of a resonating ladder.  res<=0.9 leaves filterX == x bit-for-bit.
+- Sub oscillator (Tier 3): new subOscLevel param (default 0).  A 50%
+  PolyBLEP square one octave below oscillator 1 is summed into the
+  pre-filter unison mix at centre pan, with its own per-layer phase that
+  follows the same seeded/free-run rules.  Verified: subOscLevel=0 renders
+  0 changed samples on all six probed presets; 0.6 adds the expected low
+  octave (RMS +135% on the Init patch).  UI: SUB knob added to the unison
+  strip (now 9 controls).
 
 Tooling: RenderWav now deletes the output file before writing —
 juce::File::createOutputStream does not truncate, so repeated renders were
@@ -62,6 +69,12 @@ the new branches were rendered with overrides on preset 0:
   SHA256 a056d16aeaeb655b5805693dc9c42f2613b9a43374cf1e6c25eeb811d47806df
 - pluginval strictness 5 SUCCESS on this binary; auval -v aumu MnEf EonA
   AU VALIDATION SUCCEEDED.
+
+Deployed (2026-10-11, sub-osc build):
+
+- VST3 binary SHA256 3db56238b5bf725e3bcb61f1792edafaeeb81e539dbc183d796e0ce245cbe2dc
+- AU binary SHA256 6cd047f7c62f9492e051a90f03da4d9fc4523c42be8f2395560216ab8742e42c
+- pluginval strictness 5 SUCCESS on this binary.
 
 ## Not done / risk
 

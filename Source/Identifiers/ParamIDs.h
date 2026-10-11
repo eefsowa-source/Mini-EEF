@@ -30,6 +30,9 @@ inline constexpr auto osc4Pan = "osc4Pan";
 inline constexpr auto osc4PulseWidth = "osc4PulseWidth";
 // Optional white-noise layer.  Zero keeps the legacy oscillator mix unchanged.
 inline constexpr auto noiseMix = "noiseMix";
+// Monophonic-style sub oscillator: a 50% square one octave below oscillator
+// 1, summed into the pre-filter mix.  Zero keeps the mix bit-identical.
+inline constexpr auto subOscLevel = "subOscLevel";
 // Neutral defaults (one layer, zero cents) preserve legacy presets.
 inline constexpr auto unisonVoices = "unisonVoices";
 inline constexpr auto unisonDetune = "unisonDetune";
