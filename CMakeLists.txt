@@ -18,6 +18,7 @@ endif()
 
 juce_add_plugin(EonMiniEEF
     COMPANY_NAME "EON Audio"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 EON Audio"
     BUNDLE_ID com.eonaudio.eefjp8000
     IS_SYNTH TRUE
     IS_MIDI_EFFECT FALSE
@@ -37,6 +38,10 @@ target_sources(EonMiniEEF PRIVATE
 target_compile_features(EonMiniEEF PRIVATE cxx_std_20)
 target_compile_definitions(EonMiniEEF PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
 target_link_libraries(EonMiniEEF PRIVATE juce::juce_audio_utils juce::juce_dsp)
+target_link_libraries(EonMiniEEF PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
 
 # Small offline renderer used by CI/design reviews to verify the editor skin
 # without opening a DAW. It never participates in the plugin targets.
