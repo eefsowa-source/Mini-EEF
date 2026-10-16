@@ -233,13 +233,10 @@ int main (int argc, char** argv)
         std::cerr << "band-limit sweep produced non-finite output\n";
         return 1;
     }
-    // A first-order PolyBLEP rolls off with pitch, and the measured curve follows
-    // that exactly: 0.06% at 33 Hz rising monotonically to 16.4% at 8.4 kHz at
-    // 44.1 kHz.  The gate is therefore set from the measured behaviour rather
-    // than from a preference: 25% catches a band limiter that stopped working,
-    // while leaving the documented rolloff alone.  Tightening this number would
-    // mean changing the oscillator, not the test.
-    if (worstPercent > 25.0)
+    // The four-sample residual rolls off with pitch; measured worst case is
+    // 0.28% at 8.4 kHz / 48 kHz.  A 5% gate leaves twentyfold headroom while
+    // still catching a band limiter that stopped working.
+    if (worstPercent > 5.0)
     {
         std::cerr << "band-limit sweep: " << worstPercent
                   << "% of the energy sits outside the pitch's harmonic series,"
@@ -248,8 +245,7 @@ int main (int argc, char** argv)
     }
     std::cout << "band-limit sweep: PASS (worst " << worstPercent
               << "% outside the harmonic series, all outputs finite)\n"
-              << "# Note: this is the residual of a first-order PolyBLEP and rises with"
-              << " pitch. It is a measurement, not a quality judgement.\n"
+              << "# Note: the four-sample residual still rises with pitch.\n"
               << "# Worst case: " << worstFrequency << " Hz at " << worstSampleRate
               << " Hz sample rate.\n";
     return 0;
