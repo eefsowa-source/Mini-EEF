@@ -74,7 +74,10 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
 
     processor.prepareToPlay (sampleRate, blockSize);
 
-    juce::MidiBuffer held;
+    // Notes are triggered once and held for the whole run.  Re-sending the
+    // same noteOn every block made voices pile up in release tails, so the
+    // "1 voice" rows were secretly measuring all 16 voices.
+    juce::MidiBuffer held, empty;
     for (int voice = 0; voice < voiceCount; ++voice)
         held.addEvent (juce::MidiMessage::noteOn (1, 36 + voice * 3, (juce::uint8) 110), 0);
 
@@ -83,7 +86,7 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
     for (int warm = 0; warm < 64; ++warm)
     {
         juce::AudioBuffer<float> buffer (2, blockSize);
-        processor.processBlock (buffer, held);
+        processor.processBlock (buffer, warm == 0 ? held : empty);
     }
 
     Measurement result;
@@ -91,7 +94,7 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
     for (int repeat = 0; repeat < repeats; ++repeat)
     {
         juce::AudioBuffer<float> buffer (2, blockSize);
-        processor.processBlock (buffer, held);
+        processor.processBlock (buffer, empty);
         for (int channel = 0; channel < 2; ++channel)
             for (int sample = 0; sample < blockSize; ++sample)
             {

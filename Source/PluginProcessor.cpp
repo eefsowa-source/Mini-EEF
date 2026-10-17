@@ -16,8 +16,9 @@ namespace
     //
     // The same substitution was tried on the filter drive's tanh and reverted:
     // it bought 1.5 percentage points but moved one preset's RMS by 1.6%, and
-    // a 1.5% CPU trade is not worth a measurable output change.
-    [[maybe_unused]] static float softClip (float x) noexcept
+    // a 1.5% CPU trade is not worth a measurable output change.  The voice
+    // bus reuses it for the drift-gated summing glue.
+    static float softClip (float x) noexcept
     {
         const float x2 = x * x;
         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
@@ -39,6 +40,37 @@ namespace
             return t * t + t + t + 1.0f;
         }
         return 0.0f;
+    }
+
+    // Four-point residual for one side of a step.  The two-point kernel above
+    // stays on the pulse: that waveform's harmonic series is a locked
+    // measurement.  This one is only for the saw.  Its callers pass a doubled
+    // dt, which stretches the residual over four output samples; measured
+    // out-of-band energy fell from 2.98% to 0.28% worst case.
+    float blep4Side (float t, float dt) noexcept
+    {
+        if (t < 0.0f || t >= 2.0f * dt)
+            return 0.0f;
+        const float x = t / dt;
+        float u = 2.0f - x;
+        u *= u;
+        u *= u;
+        float y = u;
+        if (t < dt)
+        {
+            float v = 1.0f - x;
+            v *= v;
+            v *= v;
+            y -= 4.0f * v;
+        }
+        return y * (1.0f / 12.0f);
+    }
+
+    float blep4 (float t, float dt) noexcept
+    {
+        // 2*dt must stay inside one cycle, or the two sides of the edge overlap.
+        dt = juce::jlimit (1.0e-5f, 0.45f, dt);
+        return blep4Side (t, dt) - blep4Side (1.0f - t, dt);
     }
 
     inline float cubicInterpolate (float y0, float y1, float y2, float y3,
@@ -108,13 +140,16 @@ namespace
             case 3: // Sine
                 return std::sin (juce::MathConstants<float>::twoPi * phase);
 
-            case 0: // PolyBLEP saw
-                return 2.0f * phase - 1.0f + blep (phase, dt);
+            case 0: // four-point PolyBLEP saw
+                // The doubled dt widens the residual to four samples: less
+                // alias energy in exchange for a gentle top-octave softening,
+                // like the slew limit of the analogue oscillators this imitates.
+                return 2.0f * phase - 1.0f + blep4 (phase, 2.0f * dt);
 
             case 4: return analogOscillatorSample (phase, analogDrive);
 
             default:
-                return 2.0f * phase - 1.0f + blep (phase, dt);
+                return 2.0f * phase - 1.0f + blep4 (phase, 2.0f * dt);
         }
     }
 
@@ -294,7 +329,19 @@ namespace
 class EonVoice : public juce::SynthesiserVoice
 {
 public:
-    explicit EonVoice (EonMiniEEFProcessor& processor) : p (processor) {}
+    explicit EonVoice (EonMiniEEFProcessor& processor) : p (processor)
+    {
+        // The parameter list is fixed after construction; resolving these
+        // pointers here removes a tree walk from every rendered block.
+        envParams = { p.apvts.getRawParameterValue (ParamIDs::attack),
+                      p.apvts.getRawParameterValue (ParamIDs::decay),
+                      p.apvts.getRawParameterValue (ParamIDs::sustain),
+                      p.apvts.getRawParameterValue (ParamIDs::release),
+                      p.apvts.getRawParameterValue (ParamIDs::filterAttack),
+                      p.apvts.getRawParameterValue (ParamIDs::filterDecay),
+                      p.apvts.getRawParameterValue (ParamIDs::filterSustain),
+                      p.apvts.getRawParameterValue (ParamIDs::filterRelease) };
+    }
 
     bool canPlaySound (juce::SynthesiserSound* sound) override
     {
@@ -406,7 +453,6 @@ public:
             currentValue (ParamIDs::cutoff, 12000.0f)));
         resonanceSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::resonance, 0.15f));
         gainSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::gain, 0.7f));
-        driveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::drive, 0.0f));
         filterDriveSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::filterDrive, 0.0f));
         noiseSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::noiseMix, 0.0f));
         oscSyncSmooth.setCurrentAndTargetValue (currentValue (ParamIDs::oscSync, 0.0f));
@@ -502,9 +548,19 @@ public:
             clearCurrentNote();
     }
 
-    void pitchWheelMoved (int) override {}
+    void pitchWheelMoved (int value) override
+    {
+        setPitchBendSemitones ((static_cast<float> (value) - 8192.0f) / 8192.0f * 2.0f);
+    }
     void controllerMoved (int, int) override {}
     void channelPressureChanged (int) override {}
+
+    // Fixed +/-2 semitone wheel. 0 keeps the legacy frequency path at exactly 1.
+    void setPitchBendSemitones (float semitones) noexcept
+    {
+        pitchBendSemis = juce::jlimit (-2.0f, 2.0f, semitones);
+        bendTarget = std::exp2f (pitchBendSemis / 12.0f);
+    }
 
     void resetForStateLoad() noexcept
     {
@@ -512,6 +568,9 @@ public:
         setKeyDown (false);
         setSustainPedalDown (false);
         setSostenutoPedalDown (false);
+        pitchBendSemis = 0.0f;
+        pitchBendRatio = 1.0f;
+        bendTarget = 1.0f;
         clearCurrentNote();
         state.fill (0.0f);
         svfIc1.fill (0.0f);
@@ -551,12 +610,12 @@ public:
     void setSR (double newSampleRate)
     {
         sr = newSampleRate;
+        bendCoeff = 1.0f - std::exp (-1.0f / (0.005f * static_cast<float> (newSampleRate)));
         env.setSampleRate (newSampleRate);
         filterEnv.setSampleRate (newSampleRate);
         cutoffSmooth.reset (newSampleRate, 0.005);
         resonanceSmooth.reset (newSampleRate, 0.005);
         gainSmooth.reset (newSampleRate, 0.005);
-        driveSmooth.reset (newSampleRate, 0.005);
         filterDriveSmooth.reset (newSampleRate, 0.005);
         noiseSmooth.reset (newSampleRate, 0.005);
         oscSyncSmooth.reset (newSampleRate, 0.005);
@@ -566,7 +625,6 @@ public:
         cutoffSmooth.setCurrentAndTargetValue (12000.0f);
         resonanceSmooth.setCurrentAndTargetValue (0.15f);
         gainSmooth.setCurrentAndTargetValue (0.7f);
-        driveSmooth.setCurrentAndTargetValue (0.0f);
         filterDriveSmooth.setCurrentAndTargetValue (0.0f);
         noiseSmooth.setCurrentAndTargetValue (0.0f);
         oscSyncSmooth.setCurrentAndTargetValue (0.0f);
@@ -629,7 +687,6 @@ public:
         auto* filterDriveParam = p.apvts.getRawParameterValue (ParamIDs::filterDrive);
         auto* filterMode = p.apvts.getRawParameterValue (ParamIDs::filterMode);
         auto* gain = p.apvts.getRawParameterValue (ParamIDs::gain);
-        auto* drive = p.apvts.getRawParameterValue (ParamIDs::drive);
         auto* lfoRate = p.apvts.getRawParameterValue (ParamIDs::lfoRate);
         auto* lfoDepth = p.apvts.getRawParameterValue (ParamIDs::lfoDepth);
         auto* lfoPitch = p.apvts.getRawParameterValue (ParamIDs::lfoPitch);
@@ -648,6 +705,17 @@ public:
             modDestinationParams[static_cast<size_t> (slot)] = p.apvts.getRawParameterValue (ParamIDs::modDestination (slot));
             modAmountParams[static_cast<size_t> (slot)] = p.apvts.getRawParameterValue (ParamIDs::modAmount (slot));
         }
+        // A slot with no destination or a zeroed amount contributes exactly
+        // zero, so it is skipped for the whole block; one block of latency on
+        // a slot that activates mid-block is below the automation grain.
+        std::array<bool, 4> modSlotActive {};
+        for (int slot = 0; slot < 4; ++slot)
+            modSlotActive[static_cast<size_t> (slot)] =
+                modSourceParams[static_cast<size_t> (slot)] != nullptr
+                && modDestinationParams[static_cast<size_t> (slot)] != nullptr
+                && modAmountParams[static_cast<size_t> (slot)] != nullptr
+                && juce::jlimit (0, 5, juce::roundToInt (modDestinationParams[static_cast<size_t> (slot)]->load())) != 0
+                && std::abs (modAmountParams[static_cast<size_t> (slot)]->load()) > 1.0e-6f;
         // Smooth the two parameters that most often receive rapid host
         // automation.  The target is captured once per block and the
         // SmoothedValue ramps sample-by-sample, avoiding zipper noise and
@@ -655,7 +723,6 @@ public:
         cutoffSmooth.setTargetValue (cutoff->load());
         resonanceSmooth.setTargetValue (resonance->load());
         gainSmooth.setTargetValue (gain->load());
-        driveSmooth.setTargetValue (drive->load());
         filterDriveSmooth.setTargetValue (filterDriveParam != nullptr ? filterDriveParam->load() : 0.0f);
         noiseSmooth.setTargetValue (noiseMixParam != nullptr ? noiseMixParam->load() : 0.0f);
         oscSyncSmooth.setTargetValue (oscSyncParam != nullptr ? oscSyncParam->load() : 0.0f);
@@ -756,15 +823,22 @@ public:
         // so the first sample always evaluates.
         std::array<float, 4> lastSemitones { 1.0e30f, 1.0e30f, 1.0e30f, 1.0e30f };
         std::array<float, 4> semitoneRatio {};
-        std::array<float, maxUnisonVoices> lastLayerCents {};
-        std::array<float, maxUnisonVoices> layerDetuneRatio {};
-        lastLayerCents.fill (1.0e30f);
         // ~30 ms one-pole for the VCO settle transient.
         const float pitchSettleDecay = 1.0f - 1.0f / (0.03f * srF);
         // -68 dB board hiss at drift=1; zero drift adds exactly +0.0.
         const float hissLevel = driftLevel * 3.9811e-4f;
         // ~40 Hz one-pole behind the resonance bass-loss emulation.
         const float resLossLpCoeff = juce::MathConstants<float>::twoPi * 40.0f / srF;
+        // Filter coefficients refresh at control rate: the inputs move
+        // slowly (5 ms ramps or slower), so updating every 16 samples keeps
+        // tan(), tanh() and the cutoff chain out of the per-sample path
+        // without an audible step.
+        float filterG = 0.0f, filterDamping = 2.0f, filterInvDenominator = 1.0f;
+        float filterInvCascadeDenominator = 1.0f, filterDriveGain = 1.0f,
+              invFilterDriveNorm = 1.0f, resBassLoss = 0.0f,
+              filterDriveBias = 0.0f, filterDriveBiasOffset = 0.0f;
+        int selectedFilter = 0, stageOneMode = 0;
+        bool filterOversample = false, filterDriveActive = false;
         for (int i = 0; i < numSamples; ++i)
         {
             const float unisonDetuneCents = juce::jlimit (0.0f, 24.0f,
@@ -777,8 +851,6 @@ public:
                 amDepthSmooth.getNextValue());
             const float outputGain = juce::jlimit (0.0f, 1.0f,
                 gainSmooth.getNextValue());
-            const float driveAmount = juce::jlimit (0.0f, 1.0f,
-                driveSmooth.getNextValue());
             // A per-voice, never-reset phase gives free-running LFO behaviour.
             // Triangle keeps the sine's free-running phase; sample & hold
             // draws one bounded random value per LFO cycle so the wander
@@ -815,12 +887,11 @@ public:
             for (int slot = 0; slot < 4; ++slot)
             {
                 const auto index = static_cast<size_t> (slot);
-                // Slots that could only contribute +-0 were left at zero when
-                // the matrix was decoded per block.
-                const int destination = modDestinationIndex[index];
-                if (destination == 0 || modSourceIndex[index] == 0
-                    || modSlotAmount[index] == 0.0f)
+                // Slots that could only contribute +-0 were marked inactive
+                // when the matrix was decoded per block.
+                if (! modSlotActive[index] || modSourceIndex[index] == 0)
                     continue;
+                const int destination = modDestinationIndex[index];
                 const float sourceValue = modulationSourceValue (modSourceIndex[index], lfo,
                                                                  envelope, vel, filterEnvelope);
                 const float amount = modSlotAmount[index];
@@ -853,6 +924,10 @@ public:
             const float voicePitchRatio = 1.0f
                 + (pitchDriftValue * driftLevel * 8.0f + pitchSettleCents)
                   * 0.0005777897f;
+            // Wheel centre (8192) stays at ratio 1, so existing renders are unchanged.
+            // bendTarget/bendCoeff are maintained by setPitchBendSemitones and
+            // setSR; recomputing them here cost an exp2f and an exp per sample.
+            pitchBendRatio += (bendTarget - pitchBendRatio) * bendCoeff;
             // exp2f(0) is exactly 1, so an inactive modulation keeps its slot
             // in the product without running the transcendental.
             const float lfoPitchSemis = lfo * lfoPitchAmount;
@@ -860,7 +935,7 @@ public:
                 (matrixPitch != 0.0f
                     ? baseFrequency * std::exp2f (matrixPitch / 12.0f) : baseFrequency)
                 * (lfoPitchSemis != 0.0f ? std::exp2f (lfoPitchSemis / 12.0f) : 1.0f)
-                * pitchVarianceRatio * voicePitchRatio;
+                * pitchVarianceRatio * voicePitchRatio * pitchBendRatio;
             // Limit each oscillator below Nyquist.  Apart from avoiding
             // invalid PolyBLEP increments, this gives a predictable mute-ish
             // behaviour instead of phase folding on the very top notes.
@@ -890,13 +965,68 @@ public:
                     * (0.5f - std::abs (oscillatorPulseWidth[oscillator] - 0.5f));
             }
             const float baseCutoff = cutoffSmooth.getNextValue();
-            // The key-tracking ratio depends only on the held note, so it is
-            // resolved once in startNote rather than exp2'd every sample.
-            const float keyRatio = keyRatioForNote;
-            const float modulatedCutoff = juce::jlimit (20.0f, 20000.0f,
-                baseCutoff * cutoffVariance * keyRatio
-                * (1.0f + lfo * lfoDepthAmount + matrixCutoff)
-                * filterEnvGain (filterEnvelope));
+            const float resonanceAmount = juce::jlimit (0.0f, 1.0f,
+                resonanceSmooth.getNextValue());
+            const float filterDriveAmount = juce::jlimit (0.0f, 1.0f,
+                filterDriveSmooth.getNextValue());
+            if ((i & 15) == 0)
+            {
+                // The key-tracking ratio depends only on the held note, so it
+                // is resolved once in startNote rather than exp2'd per sample.
+                const float modulatedCutoff = juce::jlimit (20.0f, 20000.0f,
+                    baseCutoff * cutoffVariance * keyRatioForNote
+                    * (1.0f + lfo * lfoDepthAmount + matrixCutoff)
+                    * filterEnvGain (filterEnvelope));
+                // TPT state-variable filter.  Well below Nyquist keeps the
+                // tan()-based g coefficient accurate (at 0.45*Nyquist the
+                // bilinear warp already compresses the audible top octave)
+                // while the resonance self-peak stays tame.
+                const float safeCutoff = juce::jlimit (20.0f,
+                    juce::jmin (20000.0f, 0.40f * srF), modulatedCutoff);
+                // Dedicated per-voice filter drive: a bounded tanh colouration
+                // evaluated inside the selective 2x path below.
+                filterDriveActive = filterDriveAmount > 1.0e-5f;
+                // The TPT filter stays at host rate for the broad, low-cost
+                // region.  Near the top octave, at high Q, or when the filter
+                // drive is active, two half-rate updates reduce coefficient
+                // warping and sample the drive non-linearity at twice the
+                // host rate, halving the fold depth of its products.
+                filterOversample = safeCutoff > 0.28f * srF
+                                || resonanceAmount > 0.72f
+                                || filterDriveActive;
+                const float filterRate = filterOversample
+                    ? 2.0f * srF : srF;
+                filterG = std::tan (juce::MathConstants<float>::pi
+                                    * safeCutoff / filterRate);
+                // Resonance at or below 0.9 keeps the legacy damping
+                // bit-for-bit; the top of the knob eases toward
+                // self-oscillation, which is where analog filters get their
+                // whistle.
+                filterDamping = juce::jlimit (0.02f, 2.0f,
+                    2.0f - 1.92f * resonanceAmount
+                    - 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f));
+                filterInvDenominator = 1.0f
+                    / (1.0f + filterG * (filterG + filterDamping));
+                // LPF24 cascades a second flat TPT stage (damping 2.0) behind
+                // the resonant stage: 24 dB/oct rolloff with the resonance
+                // still owned by stage one.
+                filterInvCascadeDenominator = 1.0f
+                    / (1.0f + filterG * (filterG + 2.0f));
+                selectedFilter = filterMode != nullptr
+                    ? juce::jlimit (0, 3, juce::roundToInt (filterMode->load())) : 0;
+                stageOneMode = selectedFilter == 3 ? 0 : selectedFilter;
+                filterDriveGain = 1.0f + 5.0f * filterDriveAmount;
+                invFilterDriveNorm = 1.0f / std::tanh (filterDriveGain);
+                filterDriveBias = 0.06f * filterDriveAmount;
+                filterDriveBiasOffset = std::tanh (filterDriveBias * filterDriveGain);
+                // Analog ladders lose passband level as Q rises.  Emulated as
+                // a high-pass into the filter input (the low-passed
+                // complement is subtracted), active only above resonance 0.9
+                // where the whistle already lives and only on the low-pass
+                // modes.  res<=0.9 leaves filterX == x bit-for-bit.
+                resBassLoss = (stageOneMode == 0)
+                    ? 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f) : 0.0f;
+            }
             const float syncAmount = juce::jlimit (0.0f, 1.0f,
                 oscSyncSmooth.getNextValue());
             // Voice-card crosstalk: a rendered oscillator still leaks into the
@@ -921,13 +1051,12 @@ public:
                     ? (position + drift * (0.5f + 0.5f * std::abs (position)))
                         * unisonDetuneCents * invUnisonSpan
                     : drift * driftDetuneFallbackCents;
+                // |cents| <= 48 keeps t inside +/-0.04, where this quadratic
+                // is within 0.01 cent of exp2f and avoids a libm call per
+                // unison layer per sample.
+                const float detuneT = juce::jlimit (-0.04f, 0.04f, cents / 1200.0f);
+                const float ratio = 1.0f + detuneT * (0.69314718f + 0.24022651f * detuneT);
                 const auto layer = static_cast<size_t> (unison);
-                if (cents != lastLayerCents[layer])
-                {
-                    lastLayerCents[layer] = cents;
-                    layerDetuneRatio[layer] = std::exp2f (juce::jlimit (-48.0f, 48.0f, cents) / 1200.0f);
-                }
-                const float ratio = layerDetuneRatio[layer];
                 std::array<float, 4> increment {};
                 for (size_t oscillator = 0; oscillator < 4; ++oscillator)
                 {
@@ -1136,77 +1265,26 @@ public:
             const float amGain = 1.0f - 0.5f * amDepth + 0.5f * amDepth * lfo;
             const float voiceGain = envelope * velocityGain * outputGain * amGain * levelVariance
                                   * juce::jlimit (0.0f, 2.0f, 1.0f + matrixAmp);
-            // TPT state-variable filter.  The integrator states are local to
-            // each voice, so fast cutoff automation and high resonance remain
-            // independent across notes.  Limiting the frequency below Nyquist
-            // keeps tan() well-conditioned at the top of the range.
-            // Well below Nyquist keeps the tan()-based g coefficient accurate
-            // (at 0.45*Nyquist the bilinear warp already compresses the audible
-            // top octave) while the resonance self-peak stays tame.
-            const float safeCutoff = juce::jlimit (20.0f,
-                juce::jmin (20000.0f, 0.40f * srF), modulatedCutoff);
-            const float resonanceAmount = juce::jlimit (0.0f, 1.0f,
-                resonanceSmooth.getNextValue());
-            // Resonance at or below 0.9 keeps the legacy damping bit-for-bit;
-            // the top of the knob eases toward self-oscillation, which is
-            // where analog filters get their whistle.
-            const float damping = juce::jlimit (0.02f, 2.0f,
-                2.0f - 1.92f * resonanceAmount
-                - 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f));
-            // Dedicated per-voice filter drive: a bounded tanh colouration
-            // evaluated inside the selective 2x path below.  Zero keeps the
-            // legacy filter input bit-identical.
-            const float filterDriveAmount = juce::jlimit (0.0f, 1.0f,
-                filterDriveSmooth.getNextValue());
-            const bool filterDriveActive = filterDriveAmount > 1.0e-5f;
-            // The TPT state-variable filter remains at the host rate for the
-            // broad, low-cost region.  Near the top octave, at high Q, or when
-            // the filter drive is active, two half-rate updates reduce
-            // coefficient warping and sample the drive non-linearity at
-            // twice the host rate, halving the fold depth of its products.
-            const bool filterOversample = safeCutoff > 0.28f * srF
-                                       || resonanceAmount > 0.72f
-                                       || filterDriveActive;
-            const float filterRate = filterOversample
-                ? 2.0f * srF : srF;
-            const float g = std::tan (juce::MathConstants<float>::pi * safeCutoff / filterRate);
-            // The SVF divides by this once per stage per channel; the
-            // reciprocal is computed once per sample instead (1 ulp change).
-            const float invDenominator = 1.0f / (1.0f + g * (g + damping));
-            // LPF24 cascades a second flat TPT stage (damping 2.0) behind the
-            // resonant stage: 24 dB/oct rolloff with the resonance still owned
-            // by stage one.  Each stage stays the proven unconditionally
-            // stable TPT integrator, so no new stability envelope is needed.
-            const float invCascadeDenominator = 1.0f / (1.0f + g * (g + 2.0f));
-            const int selectedFilter = filterMode != nullptr
-                ? juce::jlimit (0, 3, juce::roundToInt (filterMode->load())) : 0;
-            const int stageOneMode = selectedFilter == 3 ? 0 : selectedFilter;
-            const float filterDriveGain = 1.0f + 5.0f * filterDriveAmount;
-            const float filterDriveNorm = std::tanh (filterDriveGain);
-            const float invFilterDriveNorm = 1.0f / filterDriveNorm;
-            // Analog ladders lose passband level as Q rises.  Emulated as a
-            // high-pass into the filter input (the low-passed complement is
-            // subtracted), active only above resonance 0.9 where the whistle
-            // already lives and only on the low-pass modes.  res<=0.9 leaves
-            // filterX == x bit-for-bit.
-            const float resBassLoss = (stageOneMode == 0)
-                ? 0.6f * juce::jmax (0.0f, resonanceAmount - 0.9f) : 0.0f;
+            // Board-age summing glue: a mild bus clip blended in with drift,
+            // so aged voices bond a chord the way an overdriven output rail
+            // does.  Zero drift skips the curve entirely and the mix stays
+            // bit-identical.
+            if (driftLevel > 1.0e-6f)
+            {
+                const float busGlue = driftLevel * 0.5f;
+                unisonLeft = juce::jlimit (-4.0f, 4.0f,
+                    unisonLeft + busGlue * (softClip (unisonLeft) - unisonLeft));
+                unisonRight = juce::jlimit (-4.0f, 4.0f,
+                    unisonRight + busGlue * (softClip (unisonRight) - unisonRight));
+            }
             const std::array<float, 2> stereoInput { unisonLeft, unisonRight };
             const int channels = juce::jmin (2, buffer.getNumChannels());
             for (int channel = 0; channel < channels; ++channel)
             {
                 const float filterInput = stereoInput[static_cast<size_t> (channel)];
-                // When the oversampled global stage is active it owns the
-                // saturation; saturating here first would alias at the host
-                // rate before the upsampler can lift the band limit.
-                const float hostRateDrive = p.oversamplingBypassed() ? driveAmount : 0.0f;
-                const float x = hostRateDrive > 1.0e-5f
-                    ? p.applyDriveCurve (filterInput, 1.0f + 4.0f * hostRateDrive,
-                                         p.selectedDriveCurve())
-                    : filterInput;
                 const size_t index = static_cast<size_t> (channel);
-                resLpState[index] += resLossLpCoeff * (x - resLpState[index]);
-                const float filterX = x - resBassLoss * resLpState[index];
+                resLpState[index] += resLossLpCoeff * (filterInput - resLpState[index]);
+                const float filterX = filterInput - resBassLoss * resLpState[index];
                 // With filter drive active the two sub-steps evaluate the
                 // curve on linear-interpolated inputs (midpoint, endpoint) so
                 // the non-linearity is sampled at twice the host rate.
@@ -1216,24 +1294,30 @@ public:
                 float secondStepInput = filterX;
                 if (filterDriveActive)
                 {
-                    firstStepInput = std::tanh (0.5f * (filterX + filterInputPrev[index])
-                                                * filterDriveGain) * invFilterDriveNorm;
-                    secondStepInput = std::tanh (filterX * filterDriveGain) * invFilterDriveNorm;
+                    // Asymmetric conduction: a block-constant bias inside the
+                    // curve adds the even harmonics a driven ladder makes;
+                    // subtracting the biased centre keeps the quiescent point
+                    // at zero so no DC reaches the integrators.
+                    firstStepInput = (std::tanh ((0.5f * (filterX + filterInputPrev[index])
+                                                 + filterDriveBias) * filterDriveGain)
+                                      - filterDriveBiasOffset) * invFilterDriveNorm;
+                    secondStepInput = (std::tanh ((filterX + filterDriveBias) * filterDriveGain)
+                                       - filterDriveBiasOffset) * invFilterDriveNorm;
                 }
                 filterInputPrev[index] = filterX;
-                float filtered = processTptSvf (firstStepInput, g, damping, invDenominator,
+                float filtered = processTptSvf (firstStepInput, filterG, filterDamping, filterInvDenominator,
                                                 stageOneMode,
                                                 svfIc1[index], svfIc2[index], filterDriveActive);
                 if (selectedFilter == 3)
-                    filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
+                    filtered = processTptSvf (filtered, filterG, 2.0f, filterInvCascadeDenominator, 0,
                                               svfIc3[index], svfIc4[index]);
                 if (filterOversample)
                 {
-                    filtered = processTptSvf (secondStepInput, g, damping, invDenominator,
+                    filtered = processTptSvf (secondStepInput, filterG, filterDamping, filterInvDenominator,
                                               stageOneMode,
                                               svfIc1[index], svfIc2[index], filterDriveActive);
                     if (selectedFilter == 3)
-                        filtered = processTptSvf (filtered, g, 2.0f, invCascadeDenominator, 0,
+                        filtered = processTptSvf (filtered, filterG, 2.0f, filterInvCascadeDenominator, 0,
                                                   svfIc3[index], svfIc4[index]);
                 }
                 state[index] = filtered;
@@ -1262,10 +1346,10 @@ private:
     void updateEnvelopeParameters()
     {
         juce::ADSR::Parameters parameters;
-        parameters.attack = p.apvts.getRawParameterValue (ParamIDs::attack)->load();
-        parameters.decay = p.apvts.getRawParameterValue (ParamIDs::decay)->load();
-        parameters.sustain = p.apvts.getRawParameterValue (ParamIDs::sustain)->load();
-        parameters.release = p.apvts.getRawParameterValue (ParamIDs::release)->load();
+        parameters.attack = envParams[0]->load();
+        parameters.decay = envParams[1]->load();
+        parameters.sustain = envParams[2]->load();
+        parameters.release = envParams[3]->load();
         // Roadmap P2: the seeded envelope-time offset scales every stage of
         // this voice only.  At variance 0 the multiplier is exactly 1.0 and
         // the four timings reach juce::ADSR unchanged.
@@ -1278,17 +1362,15 @@ private:
         env.setParameters (parameters);
         sustainLevel = juce::jlimit (0.0f, 1.0f, parameters.sustain);
 
-        const auto readOr = [this] (const char* id, float fallback) noexcept
+        const auto readOr = [] (const std::atomic<float>* parameter, float fallback) noexcept
         {
-            if (const auto* parameter = p.apvts.getRawParameterValue (id))
-                return parameter->load();
-            return fallback;
+            return parameter != nullptr ? parameter->load() : fallback;
         };
         juce::ADSR::Parameters filterParameters;
-        filterParameters.attack = readOr (ParamIDs::filterAttack, 0.01f);
-        filterParameters.decay = readOr (ParamIDs::filterDecay, 0.3f);
-        filterParameters.sustain = readOr (ParamIDs::filterSustain, 0.8f);
-        filterParameters.release = readOr (ParamIDs::filterRelease, 0.4f);
+        filterParameters.attack = readOr (envParams[4], 0.01f);
+        filterParameters.decay = readOr (envParams[5], 0.3f);
+        filterParameters.sustain = readOr (envParams[6], 0.8f);
+        filterParameters.release = readOr (envParams[7], 0.4f);
         if (envelopeVariance != 1.0f)
         {
             filterParameters.attack *= envelopeVariance;
@@ -1390,7 +1472,7 @@ private:
     float keyRatioForNote = 1.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> cutoffSmooth;
     juce::SmoothedValue<float> resonanceSmooth;
-    juce::SmoothedValue<float> gainSmooth, driveSmooth, noiseSmooth,
+    juce::SmoothedValue<float> gainSmooth, noiseSmooth,
                                unisonDetuneSmooth, unisonSpreadSmooth, amDepthSmooth;
     juce::SmoothedValue<float> filterDriveSmooth;
     juce::SmoothedValue<float> oscSyncSmooth;
@@ -1398,8 +1480,11 @@ private:
     // (roadmap P1.2/P1.3).
     EnvelopeCurveState ampEnvelopeState {}, filterEnvelopeState {};
     float envCurveAmount = 0.0f, sustainLevel = 0.8f, filterSustainLevel = 0.8f;
+    float pitchBendSemis = 0.0f, pitchBendRatio = 1.0f;
+    float bendTarget = 1.0f, bendCoeff = 0.0f;
     juce::ADSR filterEnv;
     float filterEnvAmount = 0.0f;
+    std::array<std::atomic<float>*, 8> envParams {};
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
     // Cached equal-power pan gains.  panSmooth ramps over 5 ms, so after the
     // ramp settles the value stops changing and the sin/cos pair can be
@@ -1425,7 +1510,10 @@ private:
 struct EonSound:juce::SynthesiserSound{bool appliesToNote(int)override{return true;}bool appliesToChannel(int)override{return true;}};
 struct NoteOnlySynthesiser final : juce::Synthesiser
 {
-    explicit NoteOnlySynthesiser (EonMiniEEFProcessor& processor) : p (processor) {}
+    explicit NoteOnlySynthesiser (EonMiniEEFProcessor& processor) : p (processor)
+    {
+        pitchWheel.fill (8192);
+    }
 
     void renderNotesOnlyNoLock (juce::AudioBuffer<float>& output,
                                 const juce::MidiBuffer& midi,
@@ -1462,6 +1550,8 @@ struct NoteOnlySynthesiser final : juce::Synthesiser
                 eonVoice->resetForStateLoad();
         for (auto& channel : heldVelocity)
             channel.fill (0.0f);
+        pitchWheel.fill (8192);
+        sustainDown.fill (false);
         for (auto& channel : heldSequence)
             channel.fill (0);
         nextSequence = 0;
@@ -1546,8 +1636,47 @@ private:
         return oldestVoiceMatching (false);
     }
 
+    void applyPitchBendNoLock (int channel) noexcept
+    {
+        const int channelIndex = juce::jlimit (1, 16, channel) - 1;
+        const float semis = (static_cast<float> (pitchWheel[static_cast<size_t> (channelIndex)]) - 8192.0f)
+                            / 8192.0f * 2.0f;
+        for (auto* voice : voices)
+            if (voice->isPlayingChannel (channel))
+                static_cast<EonVoice*> (voice)->setPitchBendSemitones (semis);
+    }
+
+    void releaseSustainedVoicesNoLock (int channel) noexcept
+    {
+        for (auto* voice : voices)
+        {
+            if (! voice->isPlayingChannel (channel) || voice->isKeyDown() || ! voice->isSustainPedalDown())
+                continue;
+            voice->setSustainPedalDown (false);
+            stopVoice (voice, 0.0f, true);
+        }
+    }
+
     void handleNoteEventNoLock (const juce::MidiMessage& message) noexcept
     {
+        if (message.isPitchWheel())
+        {
+            const int channel = juce::jlimit (1, 16, message.getChannel());
+            pitchWheel[static_cast<size_t> (channel - 1)] = static_cast<std::uint16_t> (message.getPitchWheelValue());
+            applyPitchBendNoLock (channel);
+            return;
+        }
+
+        if (message.isController() && message.getControllerNumber() == 64)
+        {
+            const int channel = juce::jlimit (1, 16, message.getChannel());
+            const bool down = message.getControllerValue() >= 64;
+            sustainDown[static_cast<size_t> (channel - 1)] = down;
+            if (! down)
+                releaseSustainedVoicesNoLock (channel);
+            return;
+        }
+
         if (message.isNoteOn())
         {
             const int channel = message.getChannel();
@@ -1560,6 +1689,7 @@ private:
                 auto* sound = sounds.isEmpty() ? nullptr : sounds.getUnchecked (0).get();
                 startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
                             message.getFloatVelocity());
+                applyPitchBendNoLock (channel);
                 return;
             }
 
@@ -1571,6 +1701,7 @@ private:
             auto* sound = sounds.isEmpty() ? nullptr : sounds.getUnchecked (0).get();
             startVoice (chooseVoiceNoLock(), sound, channel, noteNumber,
                         message.getFloatVelocity());
+            applyPitchBendNoLock (channel);
             return;
         }
 
@@ -1579,6 +1710,17 @@ private:
             const int channel = message.getChannel();
             const int noteNumber = message.getNoteNumber();
             forgetNoteNoLock (channel, noteNumber);
+            if (sustainDown[static_cast<size_t> (juce::jlimit (1, 16, channel) - 1)])
+            {
+                for (auto* voice : voices)
+                {
+                    if (voice->getCurrentlyPlayingNote() != noteNumber || ! voice->isPlayingChannel (channel))
+                        continue;
+                    voice->setKeyDown (false);
+                    voice->setSustainPedalDown (true);
+                }
+                return;
+            }
 
             if (isMonoModeNoLock())
             {
@@ -1621,10 +1763,12 @@ private:
 
     EonMiniEEFProcessor& p;
     std::array<std::array<float, 128>, 16> heldVelocity {};
+    std::array<std::uint16_t, 16> pitchWheel {};
+    std::array<bool, 16> sustainDown {};
     std::array<std::array<std::uint32_t, 128>, 16> heldSequence {};
     std::uint32_t nextSequence = 0;
 };
-EonMiniEEFProcessor::EonMiniEEFProcessor():AudioProcessor(BusesProperties().withOutput("Output",juce::AudioChannelSet::stereo(),true)),apvts(*this,nullptr,"PARAMETERS",createParameterLayout()),synth(std::make_unique<NoteOnlySynthesiser>(*this)){synth->setMinimumRenderingSubdivisionSize(1,false);synth->addSound(new EonSound());for(int i=0;i<16;++i)synth->addVoice(new EonVoice(*this));setLatencySamples(6);}
+EonMiniEEFProcessor::EonMiniEEFProcessor():AudioProcessor(BusesProperties().withOutput("Output",juce::AudioChannelSet::stereo(),true)),apvts(*this,nullptr,"PARAMETERS",createParameterLayout()),synth(std::make_unique<NoteOnlySynthesiser>(*this)){driveCurveParameter=apvts.getRawParameterValue(ParamIDs::driveCurve);synth->setMinimumRenderingSubdivisionSize(1,false);synth->addSound(new EonSound());for(int i=0;i<16;++i)synth->addVoice(new EonVoice(*this));setLatencySamples(6);}
 juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameters;
@@ -1724,7 +1868,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     addFloat (ParamIDs::reverbModulation, 0.0f, 1.0f, 0.0f);
     parameters.push_back (std::make_unique<juce::AudioParameterChoice> (
         ParamIDs::oversampling, "Oversampling",
-        juce::StringArray { "1x Eco", "2x Quality", "4x High" }, 0));
+        juce::StringArray { "1x Eco", "2x Quality", "4x High", "8x Ultra" }, 0));
 
     const juce::StringArray modSources {
         "Off", "LFO", "Amp Env", "Velocity", "Osc 1", "Filter Env"
@@ -1750,9 +1894,8 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
 {
     const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
     const int mode = modeParameter != nullptr
-        ? juce::jlimit (0, 2, juce::roundToInt (modeParameter->load())) : 0;
+        ? juce::jlimit (0, 3, juce::roundToInt (modeParameter->load())) : 0;
     const bool willOversample = mode != 0;
-    oversamplingActive.store (willOversample, std::memory_order_relaxed);
 
     // A host may legally deliver a block larger than the prepareToPlay hint.
     // Bypass the optional stage in that case rather than resizing on the audio
@@ -1762,7 +1905,7 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         && buffer.getNumSamples() <= oversamplingBlockSize)
     {
         auto block = juce::dsp::AudioBlock<float> (buffer);
-        auto& oversampler = mode == 1 ? oversampling2x : oversampling4x;
+        auto& oversampler = mode == 1 ? oversampling2x : mode == 2 ? oversampling4x : oversampling8x;
         activeOversamplingLatency = juce::roundToInt (oversampler.getLatencyInSamples());
         auto highRateBlock = oversampler.processSamplesUp (block);
 
@@ -1770,21 +1913,22 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         // active: driving at the host rate first would alias before the
         // upsampler and defeat the purpose of the quality mode.  The voice
         // loop skips its tanh() when an oversampled stage will run, and this
-        // stage applies the full drive amount above the host rate.
+        // stage applies the full drive amount above the host rate.  The 1x
+        // path applies the same curve on the master bus instead, so every
+        // quality mode shares one drive position.
         const float amount = juce::jlimit (0.0f, 1.0f, driveAmount);
         if (amount > 0.0f)
         {
             const float gain = 1.0f + 4.0f * amount;
-            const auto* curveParameter = apvts.getRawParameterValue (ParamIDs::driveCurve);
-            const int curveMode = curveParameter != nullptr
-                ? juce::jlimit (0, 2, juce::roundToInt (curveParameter->load())) : 0;
+            const int curveMode = selectedDriveCurve();
             for (size_t channel = 0; channel < highRateBlock.getNumChannels(); ++channel)
             {
                 auto* samples = highRateBlock.getChannelPointer (channel);
                 for (size_t sample = 0; sample < highRateBlock.getNumSamples(); ++sample)
                 {
                     const float input = std::isfinite (samples[sample]) ? samples[sample] : 0.0f;
-                    const float shaped = applyDriveCurve (input, gain, curveMode);
+                    const float shaped = applyDriveCurve (input, gain, curveMode,
+                                                          static_cast<int> (channel));
                     samples[sample] = std::isfinite (shaped) ? shaped : 0.0f;
                 }
             }
@@ -1817,13 +1961,13 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         oversampler.processSamplesDown (block);
     }
 
-    // Report one fixed latency to the host and delay the 1x/2x paths to match
-    // the 4x path.  This avoids timing jumps and comb filtering when quality
+    // Report one fixed latency to the host and delay the lower paths to match
+    // the 8x path.  This avoids timing jumps and comb filtering when quality
     // changes without calling host-notification APIs on the audio thread.
     const int compensation = juce::jlimit (0, latencyBufferCapacity - 1,
         fixedLatencySamples - activeOversamplingLatency);
     const int latencyChannels = juce::jmin (2, buffer.getNumChannels());
-    // The write always happens: a host can switch to 2x or 4x mid-stream, and
+    // The write always happens: a host can switch to 2x, 4x, or 8x mid-stream, and
     // the compensation read needs the samples that were written while 1x was
     // active.  Only the read is skipped when there is nothing to compensate.
     const bool needsRead = compensation != 0;
@@ -1850,7 +1994,7 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
 }
 
 float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
-                                            int curveMode) noexcept
+                                            int curveMode, int channel) noexcept
 {
     // Mode 0 preserves the legacy symmetric tanh() so drive=0 presets and
     // the THD baseline report stay bit-comparable.
@@ -1870,9 +2014,10 @@ float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
         // Per-curve one-pole highpass at ~5 Hz. Coefficient computed inline:
         // y[n] = 0.9993 * (y[n-1] + x[n] - x[n-1]) is a standard DC killer at
         // 48 kHz (and slightly higher at 96k+, which is acceptable here).
-        const float hp = asymHpY * 0.9993f + output - asymHpX;
-        asymHpX = output;
-        asymHpY = hp;
+        const auto index = static_cast<size_t> (juce::jlimit (0, 1, channel));
+        const float hp = asymHpY[index] * 0.9993f + output - asymHpX[index];
+        asymHpX[index] = output;
+        asymHpY[index] = hp;
         return hp;
     }
     if (curveMode == 2)
@@ -1888,8 +2033,8 @@ float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
 
 void EonMiniEEFProcessor::resetDriveCurveState() noexcept
 {
-    asymHpX = 0.0f;
-    asymHpY = 0.0f;
+    asymHpX.fill (0.0f);
+    asymHpY.fill (0.0f);
 }
 
 float EonMiniEEFProcessor::applyAmpSaturation (float input, float amount) noexcept
@@ -1941,7 +2086,7 @@ void EonMiniEEFProcessor::resetReverbState() noexcept
     reverbModulationPhase = 0.0;
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -1978,6 +2123,21 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             channel.fill (0.0f);
         oversampling2x.reset();
         oversampling4x.reset();
+        oversampling8x.reset();
+    }
+    // Decide before the voice render whether the oversampled stage will run
+    // this block, so the 1x tail below applies the same master-bus drive the
+    // oversampled path owns when a quality mode is active.  A host block
+    // larger than the prepare hint falls back to the 1x stage rather than
+    // resizing on the audio thread.
+    {
+        const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
+        const int mode = modeParameter != nullptr
+            ? juce::jlimit (0, 3, juce::roundToInt (modeParameter->load())) : 0;
+        oversamplingActive.store (mode != 0
+            && b.getNumSamples() > 0
+            && b.getNumSamples() <= oversamplingBlockSize,
+            std::memory_order_relaxed);
     }
     if (auto* playhead = getPlayHead())
         if (auto position = playhead->getPosition())
@@ -1999,6 +2159,9 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     delayStereoWidth = juce::jlimit (0.0f, 1.0f,
         value (ParamIDs::delayStereo, 0.0f));
     const float ampSatAmount=value(ParamIDs::ampSat,0.0f);
+    // The master-bus drive amount is constant per block in every quality
+    // mode; the oversampled stage reads the same raw value.
+    const float driveAmount=juce::jlimit(0.0f,1.0f,value(ParamIDs::drive,0.0f));
     const int delayLength=juce::jlimit(1,fxDelay.getNumSamples()-1,(int)(delaySeconds*(float)sampleRate));
     float blockPeakL = 0.0f, blockPeakR = 0.0f;
     for (int i = 0; i < b.getNumSamples(); ++i)
@@ -2124,15 +2287,18 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             constexpr float chorusCentreSeconds = 0.025f;
             const float depth = chorusDepthSmooth.getNextValue();
             const float rate = chorusRateSmooth.getNextValue();
+            // The four taps sit at quarter-cycle offsets, so one sin/cos pair
+            // serves all of them instead of four std::sin calls per sample.
+            const float chorusSin = std::sin (chorusLfoPhase);
+            const float chorusCos = std::cos (chorusLfoPhase);
+            const float tapLfo[4] { chorusSin, chorusCos, -chorusSin, -chorusCos };
             constexpr float tapWeightsL[4] { 1.0f, 0.8f, 0.6f, 0.4f };
             constexpr float tapWeightsR[4] { 0.4f, 0.6f, 0.8f, 1.0f };
             for (int tap = 0; tap < 4; ++tap)
             {
-                const float lfoPhase = chorusLfoPhase
-                    + (float) tap * juce::MathConstants<float>::halfPi;
                 const float delaySamples = juce::jlimit (4.0f,
                     (float) (chorusBufferLength - 2),
-                    (chorusCentreSeconds + depth * std::sin (lfoPhase)) * (float) sampleRate);
+                    (chorusCentreSeconds + depth * tapLfo[tap]) * (float) sampleRate);
                 const float readPosition = (float) chorusWritePosition - delaySamples;
                 const int index1 = (int) std::floor (readPosition);
                 const float fractional = readPosition - (float) index1;
@@ -2203,7 +2369,11 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             float output = dcBlocked;
             if (oversamplingBypassed())
             {
-                const float saturated = applyAmpSaturation (dcBlocked, ampSatAmount);
+                const float driven = driveAmount > 1.0e-5f
+                    ? applyDriveCurve (dcBlocked, 1.0f + 4.0f * driveAmount,
+                                       selectedDriveCurve(), channel)
+                    : dcBlocked;
+                const float saturated = applyAmpSaturation (driven, ampSatAmount);
                 // Preserve exact small-signal dynamics.  Only excursions above
                 // the safety ceiling enter a smooth, bounded limiting knee.
                 const float magnitude = std::abs (saturated);
@@ -2217,7 +2387,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             else blockPeakR = juce::jmax (blockPeakR, std::abs (output));
         }
         fxWritePosition=(fxWritePosition+1)%fxDelay.getNumSamples();}
-    processOversampledOutput (b, value (ParamIDs::drive, 0.0f));
+    processOversampledOutput (b, driveAmount);
     peakLeft.store (blockPeakL);
     peakRight.store (blockPeakR);
 }

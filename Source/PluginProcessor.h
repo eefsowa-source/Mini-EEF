@@ -43,18 +43,24 @@ public:
     bool oversamplingBypassed() const noexcept { return oversamplingActive.load (std::memory_order_relaxed) == false; }
     int selectedDriveCurve() const noexcept
     {
-        if (const auto* parameter = apvts.getRawParameterValue (ParamIDs::driveCurve))
-            return juce::jlimit (0, 2, juce::roundToInt (parameter->load (std::memory_order_relaxed)));
+        // Cached in the constructor: the parameter list never changes after
+        // construction, and the voice loop asks for this every sample.
+        if (driveCurveParameter != nullptr)
+            return juce::jlimit (0, 2, juce::roundToInt (driveCurveParameter->load (std::memory_order_relaxed)));
         return 0;
     }
     // Roadmap step B: selectable drive curve (applied inside the oversampled
     // stage) and gentle amp-stage saturation. Both are pure, allocation-free.
-    float applyDriveCurve (float input, float gainMultiplier, int curveMode) noexcept;
+    // The channel index selects the per-channel DC-killer state for the
+    // asymmetric curve, so stereo and any 1x master-bus use stay independent.
+    float applyDriveCurve (float input, float gainMultiplier, int curveMode,
+                           int channel) noexcept;
     static float applyAmpSaturation (float input, float amount) noexcept;
     void resetDriveCurveState() noexcept;
-    float asymHpX = 0.0f, asymHpY = 0.0f;
+    std::array<float, 2> asymHpX {}, asymHpY {};
 private:
     std::atomic<bool> oversamplingActive { false };
+    std::atomic<float>* driveCurveParameter = nullptr;
     void processOversampledOutput (juce::AudioBuffer<float>&, float) noexcept;
     std::unique_ptr<juce::Synthesiser> synth;
     double sampleRate = 44100.0;
@@ -104,6 +110,8 @@ private:
     juce::dsp::Oversampling<float> oversampling2x { 2, 1,
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
     juce::dsp::Oversampling<float> oversampling4x { 2, 2,
+        juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+    juce::dsp::Oversampling<float> oversampling8x { 2, 3,
         juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
     int oversamplingBlockSize = 0;
     static constexpr int latencyBufferCapacity = 256;
