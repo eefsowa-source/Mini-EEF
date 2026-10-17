@@ -17,7 +17,7 @@ namespace
     // The same substitution was tried on the filter drive's tanh and reverted:
     // it bought 1.5 percentage points but moved one preset's RMS by 1.6%, and
     // a 1.5% CPU trade is not worth a measurable output change.
-    static float softClip (float x) noexcept
+    [[maybe_unused]] static float softClip (float x) noexcept
     {
         const float x2 = x * x;
         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
@@ -690,7 +690,6 @@ public:
         const float srF = static_cast<float> (sr);
         const float invSr = 1.0f / srF;
         const float nyquist = 0.49f * srF;
-        const float invNyquist = 1.0f / nyquist;
         const float unisonScale = 1.0f / static_cast<float> (activeUnisonVoices);
         // Reciprocals: 1 ulp off the division result, accepted trade for
         // removing four-hot divides per sample in the unison loop.
