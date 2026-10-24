@@ -8,18 +8,18 @@
 
 namespace
 {
-// Analogue-synth palette: warm walnut cheeks and a sanded aluminium panel
-// under cream silk-screening, with amber pilot lamps.  The previous teal
-// powder-coat read as digital gear; analogue panels are warmer, lower in
-// saturation, and use a cream/brown axis instead of a cyan one.
+// Analogue-synth palette: walnut cheeks bolted to one black anodised face,
+// cream silk-screening and amber pilot lamps.  Hardware panels are a single
+// sheet, so sections are etched into the face instead of stacked as cards:
+// the cream knobs and lettering carry the contrast the cards used to.
 const juce::Colour bg       (0xff241c16);
-const juce::Colour panel    (0xFF4C433A);
+const juce::Colour panel    (0xFF17140F);
 const juce::Colour edge     (0xffb9a882);
 const juce::Colour ivory    (0xffece0c8);
 const juce::Colour mint     (0xffd9a441);
 const juce::Colour mintGlow (0xfff6d78c);
 const juce::Colour mintDeep (0xff6b4a1c);
-const juce::Colour walnut   (0xff3a2a1e);
+const juce::Colour walnut   (0xff33241a);
 const juce::Colour brass    (0xffc9a15c);
 const juce::Colour cream    (0xfff2e7d2);
 constexpr int headerY = 9;
@@ -27,7 +27,7 @@ constexpr int headerHeight = 78;
 constexpr int contentTop = 90;
 // A wider margin than a digital panel would use, so the walnut cheeks and the
 // top rail actually read as a cabinet around the instrument, not a border.
-constexpr int contentMargin = 26;
+constexpr int contentMargin = 46;
 constexpr int moduleGap = 10;
 constexpr int oscillatorCardsHeight = 258;
 constexpr int oscillatorStripHeight = 112;
@@ -65,7 +65,11 @@ struct HeaderLayout
 HeaderLayout makeHeaderLayout (int width)
 {
     HeaderLayout layout;
-    layout.meterX = width - 170;
+    // Label column plus twelve 8 px lamps on a 2.5 px pitch.
+    constexpr int meterWidth = 152;
+    // The last lamp stops short of the plate edge: a lamp running into the
+    // rounded corner reads as a drawing mistake, not a meter.
+    layout.meterX = width - contentMargin - 20 - meterWidth;
     const int controlsRight = layout.meterX - 16;
 
     constexpr int actionsWidth = 3 * 58 + 2 * 6;
@@ -245,14 +249,14 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
         woodCache = juce::Image (juce::Image::ARGB, w, h, true);
         juce::Graphics wood (woodCache);
         wood.fillAll (bg);
-        juce::ColourGradient cheek (juce::Colour (0xFF6B5138), 0.0f, 0.0f,
+        juce::ColourGradient cheek (juce::Colour (0xFF8A6440), 0.0f, 0.0f,
                                     walnut, 0.0f, (float) h, false);
         wood.setGradientFill (cheek);
         wood.fillRect (0, 0, w, h);
 
         // Cathedral grain: nested arcs whose centre wanders down the board,
         // which is what gives flat-sawn walnut its arch pattern.
-        wood.setColour (juce::Colours::black.withAlpha (0.10f));
+        wood.setColour (juce::Colours::black.withAlpha (0.16f));
         for (int arc = 0; arc < 26; ++arc)
         {
             const float t = (float) arc / 26.0f;
@@ -272,10 +276,10 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
             const float t = (float) line / 46.0f;
             const float y = (float) h * (0.02f + 0.96f * t);
             const float wobble = 5.0f * std::sin (t * 11.0f) + 2.5f * std::sin (t * 27.0f);
-            wood.setColour (juce::Colours::black.withAlpha (0.030f + 0.030f
+            wood.setColour (juce::Colours::black.withAlpha (0.045f + 0.045f
                                       * (0.5f + 0.5f * std::sin (t * 19.0f))));
             wood.drawLine (0.0f, y + wobble, (float) w, y - wobble, 0.8f);
-            wood.setColour (juce::Colour (0xFFB08B5E).withAlpha (0.020f));
+            wood.setColour (juce::Colour (0xFFC9A273).withAlpha (0.035f));
             wood.drawLine (0.0f, y + wobble + 1.0f, (float) w, y - wobble + 1.0f, 0.6f);
         }
         // Speckle: the open pores that make a satin lacquer look like wood.
@@ -292,24 +296,66 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
                                     (float) h, false);
         wood.setGradientFill (sheen);
         wood.fillRect (0, 0, w, h);
+
+        // The cabinet face: one continuous anodised plate between the cheeks.
+        // Etched sections are painted on it later; the plate itself and its
+        // brushing never change after a resize, so they live in the cache.
+        const auto plate = juce::Rectangle<float> ((float) contentMargin - 10.0f, 6.0f,
+                                                   (float) w - 2.0f * ((float) contentMargin - 10.0f),
+                                                   (float) h - 12.0f);
+        wood.setColour (juce::Colours::black.withAlpha (0.62f));
+        wood.fillRoundedRectangle (plate.expanded (3.0f).translated (0.0f, 2.0f), 9.0f);
+        juce::ColourGradient anodised (juce::Colour (0xFF2C2822), plate.getX(), plate.getY(),
+                                       juce::Colour (0xFF15130F), plate.getRight(), plate.getBottom(), false);
+        wood.setGradientFill (anodised);
+        wood.fillRoundedRectangle (plate, 6.0f);
+        wood.saveState();
+        juce::Path plateClip;
+        plateClip.addRoundedRectangle (plate, 6.0f);
+        wood.reduceClipRegion (plateClip.getBounds().toNearestInt());
+        for (int brushY = (int) plate.getY(); brushY < (int) plate.getBottom(); brushY += 2)
+        {
+            const float phase = 0.5f + 0.5f * std::sin ((float) brushY * 0.9f);
+            wood.setColour (juce::Colours::white.withAlpha (0.007f + 0.010f * phase));
+            wood.fillRect ((int) plate.getX(), brushY, (int) plate.getWidth(), 1);
+        }
+        wood.restoreState();
+        // Lit top edge, shaded bottom edge: a sheet of metal has thickness.
+        wood.setColour (juce::Colour (0xFF8A7C66).withAlpha (0.55f));
+        wood.drawRoundedRectangle (plate.reduced (0.5f), 6.0f, 1.0f);
+        wood.setColour (juce::Colours::black.withAlpha (0.55f));
+        wood.drawLine (plate.getX() + 6.0f, plate.getBottom() - 1.0f,
+                       plate.getRight() - 6.0f, plate.getBottom() - 1.0f, 1.2f);
+
+        // The cheeks are bolted on: one slotted screw per corner, on the wood
+        // rather than the face.  Static geometry, so it lives in the cache.
+        for (const float screwX : { (float) contentMargin * 0.5f,
+                                    (float) w - (float) contentMargin * 0.5f })
+            for (const float screwY : { 22.0f, (float) h - 22.0f })
+            {
+                constexpr float head = 7.0f;
+                wood.setColour (juce::Colours::black.withAlpha (0.45f));
+                wood.fillEllipse (screwX - head, screwY - head + 1.4f, head * 2.0f, head * 2.0f);
+                juce::ColourGradient steel (juce::Colour (0xFFB9A98C), screwX - head, screwY - head,
+                                            juce::Colour (0xFF5A4C39), screwX + head, screwY + head, false);
+                wood.setGradientFill (steel);
+                wood.fillEllipse (screwX - head, screwY - head, head * 2.0f, head * 2.0f);
+                wood.setColour (juce::Colours::black.withAlpha (0.62f));
+                wood.drawLine (screwX - head * 0.62f, screwY, screwX + head * 0.62f, screwY, 1.6f);
+                wood.setColour (juce::Colour (0xFFE6D8BD).withAlpha (0.22f));
+                wood.drawLine (screwX - head * 0.62f, screwY - 1.1f,
+                               screwX + head * 0.62f, screwY - 1.1f, 0.7f);
+            }
     }
     g.drawImageAt (woodCache, 0, 0);
 
-    const auto header = juce::Rectangle<float> (12.0f, (float) headerY, (float) w - 24.0f, (float) headerHeight);
-    g.setColour (juce::Colours::black.withAlpha (0.58f));
-    g.fillRoundedRectangle (header.translated (0.0f, 0.8f), 6.0f);
-    juce::ColourGradient headerMetal (juce::Colour (0xff5f4a36), header.getCentreX(), header.getY(),
-                                      juce::Colour (0xFF1A140E), header.getCentreX(), header.getBottom(), false);
-    g.setGradientFill (headerMetal);
-    g.fillRoundedRectangle (header, 6.0f);
-    g.setColour (brass.withAlpha (0.70f));
-    g.drawRoundedRectangle (header, 6.0f, 1.0f);
-    g.setColour (juce::Colour (0xff16110c).withAlpha (0.88f));
-    g.drawRoundedRectangle (header.reduced (1.6f), 5.0f, 0.65f);
-    juce::ColourGradient topRail (mintGlow, 0.0f, 0.0f,
-                                  mintDeep, (float) w, 0.0f, false);
-    g.setGradientFill (topRail);
-    g.fillRect (0, 0, w, 4);
+    // Header: no card.  A screened rule under the name plate separates the
+    // brand from the controls the way a painted panel is split, without a
+    // floating box around the text.
+    g.setColour (juce::Colour (0xFF8A7C66).withAlpha (0.45f));
+    g.fillRect (contentMargin, headerY + headerHeight - 4, w - 2 * contentMargin, 1);
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.fillRect (contentMargin, headerY + headerHeight - 3, w - 2 * contentMargin, 1);
 
     const auto headerLayout = makeHeaderLayout (w);
     auto headerCaption = [&] (const juce::String& text, int x, int width, int y)
@@ -321,33 +367,43 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
 
     g.setColour (ivory);
     g.setFont (EonAnalogLookAndFeel::displayFont (30.0f));
-    g.drawText ("EEF-JP8000", 24, 16, 286, 31, juce::Justification::left);
+    // 8 px in from the plate edge, which keeps the name on metal now that the
+    // cheeks are wide enough to be seen.
+    g.drawText ("EEF-JP8000", contentMargin - 2, 16, 286, 31, juce::Justification::left);
     g.setColour (mintGlow.withAlpha (0.92f));
     g.setFont (EonAnalogLookAndFeel::signatureFont (21.0f));
-    g.drawText ("aoi yume", 25, 50, 275, 25, juce::Justification::left);
+    g.drawText ("aoi yume", contentMargin - 1, 50, 275, 25, juce::Justification::left);
     headerCaption ("QUALITY", headerLayout.qualityX, headerLayout.qualityWidth, 13);
     headerCaption ("PATCH", headerLayout.patchX, headerLayout.patchWidth, 13);
     headerCaption ("ACTIONS", headerLayout.actionsX, 3 * headerLayout.actionWidth + 12, 13);
     g.fillRect (headerLayout.meterX - 12, 18, 1, 54);
     g.setColour (mint);
     g.setFont (EonAnalogLookAndFeel::panelFont (11.8f, true, 0.92f));
-    g.drawText ("OUTPUT", headerLayout.meterX, 20, 145, 14, juce::Justification::right);
+    g.drawText ("OUTPUT", headerLayout.meterX, 20, 152, 14, juce::Justification::right);
     auto meter = [&] (int y, float value, const juce::String& label)
     {
         constexpr int segments = 12;
         constexpr float segmentW = 8.0f;
         constexpr float segmentGap = 2.5f;
         const float clamped = juce::jlimit (0.0f, 1.0f, value);
+        // The ladder sits in a black window; without the trench the unlit
+        // lamps read as a dotted smudge until the signal drives them.
+        const float runLeft = (float) headerLayout.meterX + 28.0f;
+        const float runWidth = (float) segments * (segmentW + segmentGap) - segmentGap;
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.fillRoundedRectangle (runLeft - 2.0f, (float) y - 2.0f, runWidth + 4.0f, 9.0f, 2.0f);
         for (int segment = 0; segment < segments; ++segment)
         {
             const bool lit = clamped * (float) segments > (float) segment;
-            const auto lamp = segment >= 10 ? mintGlow
-                            : (segment >= 8 ? mint : mintDeep.brighter (0.20f));
+            // A hardware ladder keeps its three signal colours: green to
+            // show level, amber near the top, red on the last lamps.
+            const auto lamp = segment >= 10 ? juce::Colour (0xffc1503c)
+                            : (segment >= 8 ? mint : juce::Colour (0xff8aa46b));
             const auto lampBounds = juce::Rectangle<float> ((float) headerLayout.meterX + 28.0f + (float) segment * (segmentW + segmentGap),
                                                              (float) y, segmentW, 5.0f);
-            g.setColour (juce::Colours::black.withAlpha (0.62f));
-            g.fillRoundedRectangle (lampBounds.translated (0.0f, 1.0f), 1.5f);
-            g.setColour (lit ? lamp : lamp.darker (0.75f).withAlpha (0.55f));
+            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.fillRoundedRectangle (lampBounds, 1.5f);
+            g.setColour (lit ? lamp : lamp.withAlpha (0.16f));
             g.fillRoundedRectangle (lampBounds, 1.5f);
         }
         g.setColour (ivory.withAlpha (0.78f));
@@ -356,68 +412,32 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     };
     meter (47, meterLeft, "L"); meter (62, meterRight, "R");
 
-    auto box = [&] (juce::Rectangle<int> r, const juce::String& title, juce::Colour accent = mint)
+    // One section = one etched area: a hairline outline, a screened title, and
+    // nothing raised.  Hardware says where a control group starts with paint,
+    // not with a shadowed card, so no bezel, no corner screws, no accent bar.
+    auto section = [&] (juce::Rectangle<int> r, juce::String title, bool gold = false)
     {
-        const auto outer = r.toFloat();
-        const auto inner = outer.reduced (2.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.62f));
-        g.fillRoundedRectangle (outer.translated (0.0f, 3.0f), 8.0f);
-        juce::ColourGradient bezel (brass.brighter (0.18f), outer.getCentreX(), outer.getY(),
-                                    juce::Colour (0xff1b1510), outer.getCentreX(), outer.getBottom(), false);
-        g.setGradientFill (bezel);
-        g.fillRoundedRectangle (outer, 8.0f);
-        juce::ColourGradient module (juce::Colour (0xFF7C6F5E), inner.getCentreX(), inner.getY(),
-                                     juce::Colour (0xFF52483C), inner.getCentreX(), inner.getBottom(), false);
-        g.setGradientFill (module);
-        g.fillRoundedRectangle (inner, 6.2f);
-        // Fine horizontal brushing, clipped to the module: sanded aluminium
-        // panels scatter light along the grain rather than across it.
-        g.saveState();
-        juce::Path moduleClip;
-        moduleClip.addRoundedRectangle (inner, 6.2f);
-        g.reduceClipRegion (moduleClip.getBounds().toNearestInt());
-        for (int brushY = (int) inner.getY(); brushY < inner.getBottom(); brushY += 3)
-        {
-            const float phase = 0.5f + 0.5f * std::sin ((float) brushY * 1.7f);
-            g.setColour (juce::Colours::white.withAlpha (0.012f + 0.012f * phase));
-            g.fillRect ((int) inner.getX(), brushY, (int) inner.getWidth(), 1);
-        }
-        g.restoreState();
-        g.setColour (juce::Colours::black.withAlpha (0.70f));
-        g.drawRoundedRectangle (inner, 6.2f, 0.7f);
-        g.setColour (accent.withAlpha (0.62f));
-        g.fillRoundedRectangle (juce::Rectangle<float> ((float) r.getX() + 8.0f,
-                                                         (float) r.getY() + 7.0f,
-                                                         (float) r.getWidth() - 16.0f, 2.5f), 1.2f);
-        g.setColour (accent);
-        g.setFont (EonAnalogLookAndFeel::panelFont (14.8f, true, 0.93f));
-        g.drawText (title, r.getX() + 13, r.getY() + 11, r.getWidth() - 26, 19, juce::Justification::left);
-        g.setColour (cream.withAlpha (0.34f));
-        g.fillRect (r.getX() + 12, r.getY() + 38, r.getWidth() - 24, 1);
-        for (const auto corner : { juce::Point<int> (r.getX() + 9, r.getY() + 9),
-                                   juce::Point<int> (r.getRight() - 9, r.getY() + 9),
-                                   juce::Point<int> (r.getX() + 9, r.getBottom() - 9),
-                                   juce::Point<int> (r.getRight() - 9, r.getBottom() - 9) })
-        {
-            g.setColour (juce::Colours::black.withAlpha (0.80f));
-            g.fillEllipse ((float) corner.x - 2.4f, (float) corner.y - 1.7f, 4.8f, 4.8f);
-            g.setColour (brass.darker (0.10f));
-            g.fillEllipse ((float) corner.x - 2.1f, (float) corner.y - 2.2f, 4.2f, 4.2f);
-            g.setColour (bg);
-            g.fillEllipse ((float) corner.x - 1.4f, (float) corner.y - 1.5f, 2.8f, 2.8f);
-            g.setColour (cream.withAlpha (0.46f));
-            g.drawLine ((float) corner.x - 0.8f, (float) corner.y - 0.3f,
-                        (float) corner.x + 0.8f, (float) corner.y - 0.3f, 0.7f);
-        }
+        const auto plate = r.toFloat();
+        g.setColour (juce::Colours::black.withAlpha (0.20f));
+        g.fillRoundedRectangle (plate, 4.0f);
+        g.setColour (cream.withAlpha (0.16f));
+        g.drawRoundedRectangle (plate.reduced (0.5f), 4.0f, 1.0f);
+
+        g.setColour ((gold ? mint : cream).withAlpha (gold ? 1.0f : 0.95f));
+        g.setFont (EonAnalogLookAndFeel::panelFont (14.6f, true, 0.93f));
+        g.drawText (title.replace ("  |  ", "   \u00b7   "), r.getX() + 12, r.getY() + 10,
+                    r.getWidth() - 24, 18, juce::Justification::left);
+        g.setColour ((gold ? mint : cream).withAlpha (gold ? 0.42f : 0.18f));
+        g.fillRect (r.getX() + 12, r.getY() + 36, r.getWidth() - 24, 1);
     };
     const int m = contentMargin, gap = moduleGap, top = contentTop, topH = oscillatorHeight;
     const int cardW = (w - 2 * m - gap) / 2;
     const int cardH = (oscillatorCardsHeight - gap) / 2;
-    box ({ m, top, cardW, cardH }, "OSCILLATOR 1  |  PRIMARY");
-    box ({ m + cardW + gap, top, cardW, cardH }, "OSCILLATOR 2  |  HARMONIC");
-    box ({ m, top + cardH + gap, cardW, cardH }, "OSCILLATOR 3  |  LAYER");
-    box ({ m + cardW + gap, top + cardH + gap, cardW, cardH }, "OSCILLATOR 4  |  LAYER");
-    box ({ m, top + oscillatorCardsHeight + gap, w - 2 * m, oscillatorStripHeight }, "OSCILLATOR GLOBAL  |  VOICE  |  UNISON  |  NOISE", mintGlow);
+    section ({ m, top, cardW, cardH }, "OSCILLATOR 1  |  PRIMARY");
+    section ({ m + cardW + gap, top, cardW, cardH }, "OSCILLATOR 2  |  HARMONIC");
+    section ({ m, top + cardH + gap, cardW, cardH }, "OSCILLATOR 3  |  LAYER");
+    section ({ m + cardW + gap, top + cardH + gap, cardW, cardH }, "OSCILLATOR 4  |  LAYER");
+    section ({ m, top + oscillatorCardsHeight + gap, w - 2 * m, oscillatorStripHeight }, "OSCILLATOR GLOBAL  |  VOICE  |  UNISON  |  NOISE");
     // The FX strip takes whatever height is left between the lower modules and
     // the bottom margin, so the cabinet reads as one filled face at any window
     // height instead of leaving a band of bare wood in the middle.
@@ -430,13 +450,18 @@ void EonMiniEEFEditor::paint (juce::Graphics& g)
     const int lowerH = lowerSectionHeight;
     const int envW = (w - 2 * m - 2 * gap) * 32 / 100;
     const int filterW = (w - 2 * m - 2 * gap) * 30 / 100;
-    box ({ m, lowerY, envW, lowerH }, "AMP ENVELOPE  |  FILTER ENVELOPE");
-    box ({ m + envW + gap, lowerY, filterW, lowerH }, "FILTER  |  OUTPUT");
-    box ({ m + envW + filterW + 2 * gap, lowerY, w - m - (m + envW + filterW + 2 * gap), lowerH }, "MODULATION  |  MOTION", mintGlow);
-    box ({ m, fxY, w - 2 * m, fxHeight }, "GLOBAL FX  |  DELAY  |  CHORUS  |  REVERB", mintGlow);
-    g.setColour (ivory.withAlpha (0.76f));
-    g.setFont (EonAnalogLookAndFeel::panelFont (12.5f, true, 0.93f));
-    g.drawText ("VCO A + VCO B  ->  FILTER  ->  AMP  ->  MOD  ->  FX", m + 10, fxY - 16, 520, 14, juce::Justification::left);
+    section ({ m, lowerY, envW, lowerH }, "AMP ENVELOPE  |  FILTER ENVELOPE");
+    // The filter is the one section a 1970s panel printed in gold; keeping
+    // that single signal colour is what makes the rest read as silkscreen.
+    section ({ m + envW + gap, lowerY, filterW, lowerH }, "FILTER  |  OUTPUT", true);
+    section ({ m + envW + filterW + 2 * gap, lowerY, w - m - (m + envW + filterW + 2 * gap), lowerH }, "MODULATION  |  MOTION");
+    section ({ m, fxY, w - 2 * m, fxHeight }, "GLOBAL FX  |  DELAY  |  CHORUS  |  REVERB");
+    // The signal path is screened on the FX title line rather than crammed
+    // into the gap above it, where it used to touch both borders.
+    g.setColour (ivory.withAlpha (0.40f));
+    g.setFont (EonAnalogLookAndFeel::panelFont (11.2f, true, 0.93f));
+    g.drawText ("VCO A + VCO B  >  FILTER  >  AMP  >  MOD  >  FX",
+                m + 12, fxY + 11, w - 2 * m - 24, 14, juce::Justification::right);
 }
 void EonMiniEEFEditor::resized()
 {

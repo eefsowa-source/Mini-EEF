@@ -202,19 +202,19 @@ public:
         // direction (upper-left) is used for every element on the panel, so
         // the whole face looks lit by the same lamp instead of each part
         // carrying its own highlight.
-        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
         g.fillEllipse (outer.reduced (1.0f).translated (radius * 0.05f, radius * 0.06f));
 
         // Barrel wall: the skirt the cap is pressed into, lit from upper-left.
         const auto barrel = outer;
-        juce::ColourGradient wall (juce::Colour (0xFF3A342D), centre.x - radius, centre.y,
-                                   juce::Colour (0xFF15120F), centre.x + radius, centre.y + diameter, false);
+        juce::ColourGradient wall (juce::Colour (0xFF4A4237), centre.x - radius, centre.y,
+                                   juce::Colour (0xFF191510), centre.x + radius, centre.y + diameter, false);
         g.setGradientFill (wall);
         g.fillEllipse (barrel);
 
         // Dark skirt under the cap.
-        juce::ColourGradient skirt (juce::Colour (0xFF37312A), outer.getCentreX(), outer.getY(),
-                                    juce::Colour (0xFF100E0C), outer.getCentreX(), outer.getBottom(), false);
+        juce::ColourGradient skirt (juce::Colour (0xFF413A30), outer.getCentreX(), outer.getY(),
+                                    juce::Colour (0xFF14110D), outer.getCentreX(), outer.getBottom(), false);
         g.setGradientFill (skirt);
         g.fillEllipse (outer);
         g.setColour (juce::Colours::black.withAlpha (0.60f));
@@ -334,8 +334,8 @@ public:
         juce::Path arc;
         arc.addCentredArc (cx, cy, radius + 1.2f, radius + 1.2f,
                            0.0f, rotaryStartAngle, valueAngle, true);
-        g.setColour ((brassCap ? juce::Colour (0xfff6d78c) : juce::Colour (0xfff0d9a8)).withAlpha (brassCap ? 0.85f : 0.50f));
-        g.strokePath (arc, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
+        g.setColour ((brassCap ? juce::Colour (0xfff6d78c) : juce::Colour (0xffd9a441)).withAlpha (brassCap ? 0.90f : 0.80f));
+        g.strokePath (arc, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
                                                   juce::PathStrokeType::rounded));
 
         // Pointer: a single black line printed into the cap, the way an
