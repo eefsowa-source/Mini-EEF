@@ -24,53 +24,111 @@ namespace
         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
     }
 
-    float blep (float t, float dt)
+    // Band-limited step residual, sampled at 128 points per sample out to
+    // +/-64 samples.  Two polynomial kernels lived here before: a 2-point one
+    // for the pulse, and a 4-point one whose dt the saw doubled.  The second
+    // bought a low out-of-band reading by filtering the waveform itself: at
+    // 8.4 kHz it left the fundamental 8 dB and the second harmonic 40 dB down,
+    // which is not a saw.  This table is the residual of the ideal (brickwall)
+    // step, so everything below Nyquist keeps its level and only the truncated
+    // tails ring.  SawSweep measures -89.5 dB worst alias at 8.4 kHz with the
+    // first sixteen harmonics within 0.5 dB; the four-point kernel reported
+    // -58 dB only because it had deleted the second harmonic.
+    constexpr int stepKernelTaps = 64;
+    constexpr int stepKernelPoints = 128;
+    constexpr int stepKernelSize = stepKernelTaps * stepKernelPoints + 1;
+    constexpr double stepKernelBeta = 8.0;
+
+    double besselI0 (double x) noexcept
     {
-        // Keep the correction well-defined for the highest notes and for
-        // hosts running at unusual sample rates.
-        dt = juce::jlimit (1.0e-5f, 0.49f, dt);
-        if (t < dt)
+        double sum = 1.0, term = 1.0;
+        const double quarter = 0.25 * x * x;
+        for (int k = 1; k < 40; ++k)
         {
-            t /= dt;
-            return t + t - t * t - 1.0f;
+            term *= quarter / (static_cast<double> (k) * static_cast<double> (k));
+            sum += term;
+            if (term < sum * 1.0e-16)
+                break;
         }
-        if (t > 1.0f - dt)
-        {
-            t = (t - 1.0f) / dt;
-            return t * t + t + t + 1.0f;
-        }
-        return 0.0f;
+        return sum;
     }
 
-    // Four-point residual for one side of a step.  The two-point kernel above
-    // stays on the pulse: that waveform's harmonic series is a locked
-    // measurement.  This one is only for the saw.  Its callers pass a doubled
-    // dt, which stretches the residual over four output samples; measured
-    // out-of-band energy fell from 2.98% to 0.28% worst case.
-    float blep4Side (float t, float dt) noexcept
+    struct StepKernel
     {
-        if (t < 0.0f || t >= 2.0f * dt)
-            return 0.0f;
-        const float x = t / dt;
-        float u = 2.0f - x;
-        u *= u;
-        u *= u;
-        float y = u;
-        if (t < dt)
+        std::array<float, stepKernelSize> value {};
+
+        StepKernel()
         {
-            float v = 1.0f - x;
-            v *= v;
-            v *= v;
-            y -= 4.0f * v;
+            // r(x) = (Si(pi x) / pi - 0.5) * taper(x) for the distance x in
+            // samples from a rising step, x >= 0 only.  Si is integrated here,
+            // 64 trapezoids per table point, once when the processor is
+            // prepared.  The minus-0.5 is the residual's jump at the edge and
+            // stays out of the table: at() puts it back with a sign flip.  Left
+            // in the table, linear interpolation straddled the jump and smeared
+            // a full step's worth of error over every edge landing inside one
+            // table interval -- measured as broadband noise 40 dB above the
+            // alias floor everywhere.
+            const double pi = juce::MathConstants<double>::pi;
+            const auto sinc = [] (double t) { return t == 0.0 ? 1.0 : std::sin (t) / t; };
+            constexpr int integrationSteps = 64;
+            const double peak = besselI0 (stepKernelBeta);
+            double z = 0.0, si = 0.0;
+
+            for (int n = 0; n < stepKernelSize; ++n)
+            {
+                const double target = pi * n / stepKernelPoints;
+                const double dz = (target - z) / integrationSteps;
+                for (int s = 0; s < integrationSteps; ++s)
+                {
+                    const double a = z + s * dz;
+                    si += 0.5 * (sinc (a) + sinc (a + dz)) * dz;
+                }
+                z = target;
+
+                // A Kaiser taper, normalised to reach zero at the support edge:
+                // the cut at that edge, not the residual itself, is what sets
+                // the alias floor.  A raised cosine there measured 7 dB worse.
+                const double reach = static_cast<double> (n) / (stepKernelTaps * stepKernelPoints);
+                const double window = besselI0 (stepKernelBeta * std::sqrt (juce::jmax (0.0, 1.0 - reach * reach)));
+                const double taper = (window - 1.0) / (peak - 1.0);
+                value[static_cast<size_t> (n)] = static_cast<float> ((si / pi - 0.5) * taper);
+            }
         }
-        return y * (1.0f / 12.0f);
+
+        // Odd by construction, so one side of the table serves both.  The
+        // interpolation therefore only ever crosses smooth values.
+        float at (float x) const noexcept
+        {
+            const float points = std::abs (x) * stepKernelPoints;
+            const int index = static_cast<int> (points);
+            if (index >= stepKernelSize - 1)
+                return 0.0f;
+            const float fraction = points - static_cast<float> (index);
+            const float v = value[static_cast<size_t> (index)]
+                          + fraction * (value[static_cast<size_t> (index) + 1]
+                                        - value[static_cast<size_t> (index)]);
+            return x < 0.0f ? -v : v;
+        }
+    };
+
+    // Built once, 8193 points x 64 integration steps, from prepareToPlay.
+    const StepKernel& stepKernel()
+    {
+        static const StepKernel kernel;
+        return kernel;
     }
 
-    float blep4 (float t, float dt) noexcept
+    // Residual summed over every edge inside the kernel's reach: a cycle is a
+    // few samples wide at the top of the range, so more than the two nearest
+    // edges can count there.
+    float stepCorrection (float phase, float increment, float jump) noexcept
     {
-        // 2*dt must stay inside one cycle, or the two sides of the edge overlap.
-        dt = juce::jlimit (1.0e-5f, 0.45f, dt);
-        return blep4Side (t, dt) - blep4Side (1.0f - t, dt);
+        const auto& kernel = stepKernel();
+        const int reach = static_cast<int> (stepKernelTaps * increment) + 1;
+        float sum = 0.0f;
+        for (int k = -reach; k <= reach; ++k)
+            sum += kernel.at ((phase - static_cast<float> (k)) / increment);
+        return jump * sum;
     }
 
     inline float cubicInterpolate (float y0, float y1, float y2, float y3,
@@ -122,7 +180,7 @@ namespace
 
         switch (juce::jlimit (0, 4, waveform))
         {
-            case 1: // PolyBLEP pulse
+            case 1: // Band-limited pulse
             {
                 const float width = juce::jlimit (0.05f, 0.95f, pulseWidth);
                 // phase+1-width lands in (0.05, 1.95), so the wrap needs at
@@ -130,8 +188,8 @@ namespace
                 float widthPhase = phase + 1.0f - width;
                 if (widthPhase >= 1.0f) widthPhase -= 1.0f;
                 return (phase < width ? 1.0f : -1.0f)
-                     + blep (phase, dt)
-                     - blep (widthPhase, dt);
+                     + stepCorrection (phase, dt, 2.0f)
+                     + stepCorrection (widthPhase, dt, -2.0f);
             }
 
             case 2: // Symmetric triangle; continuous at both turning points
@@ -140,22 +198,19 @@ namespace
             case 3: // Sine
                 return std::sin (juce::MathConstants<float>::twoPi * phase);
 
-            case 0: // four-point PolyBLEP saw
-                // The doubled dt widens the residual to four samples: less
-                // alias energy in exchange for a gentle top-octave softening,
-                // like the slew limit of the analogue oscillators this imitates.
-                return 2.0f * phase - 1.0f + blep4 (phase, 2.0f * dt);
+            case 0: // Band-limited saw
+                return 2.0f * phase - 1.0f + stepCorrection (phase, dt, -2.0f);
 
             case 4: return analogOscillatorSample (phase, analogDrive);
 
             default:
-                return 2.0f * phase - 1.0f + blep4 (phase, 2.0f * dt);
+                return 2.0f * phase - 1.0f + stepCorrection (phase, dt, -2.0f);
         }
     }
 
     // The same shapes without any band-limit correction, for measuring the
-    // height of a sync step discontinuity.  Waveforms 2-4 have no internal
-    // blep, so they reuse oscillatorSample's math by construction.
+    // height of a sync step discontinuity.  Waveforms 2-4 are continuous or
+    // carry no correction, so they reuse oscillatorSample's math by construction.
     float rawOscillatorSample (float phase, int waveform, float pulseWidth,
                                float analogDrive) noexcept
     {
@@ -2086,7 +2141,7 @@ void EonMiniEEFProcessor::resetReverbState() noexcept
     reverbModulationPhase = 0.0;
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;(void)stepKernel();synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {

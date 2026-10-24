@@ -6,6 +6,7 @@ JuceLibraryCode/
 
 # Local validation and rendered-review outputs
 output/
+__pycache__/
 .continuity/
 --help/
 *.wav

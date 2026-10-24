@@ -40,7 +40,8 @@ struct Measurement
 // patches leave some of the four at level 0, and a muted oscillator skips its
 // waveform evaluation, so the all-four case is not a typical load.
 Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
-                 int oversamplingMode, int repeats, int activeOscillators = 4)
+                 int oversamplingMode, int repeats, int activeOscillators = 4,
+                 int firstNote = 36)
 {
     EonMiniEEFProcessor processor;
     const auto setPlain = [&processor] (const char* id, float plainValue)
@@ -79,7 +80,8 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
     // "1 voice" rows were secretly measuring all 16 voices.
     juce::MidiBuffer held, empty;
     for (int voice = 0; voice < voiceCount; ++voice)
-        held.addEvent (juce::MidiMessage::noteOn (1, 36 + voice * 3, (juce::uint8) 110), 0);
+        held.addEvent (juce::MidiMessage::noteOn (1, juce::jmin (127, firstNote + voice * 3),
+                                                  (juce::uint8) 110), 0);
 
     // Warm up so the first-touch page faults and the oversampler's filter state
     // setup are not counted as steady-state cost.
@@ -122,6 +124,9 @@ Measurement run (double sampleRate, int blockSize, int voiceCount, int unison,
 int main (int argc, char** argv)
 {
     const int repeats = argc > 1 ? juce::jlimit (16, 20000, (int) std::atol (argv[1])) : 2000;
+    // The band-limit kernel's reach grows with pitch, so the top octave is its
+    // most expensive corner and the default chord (36 upward) never reaches it.
+    const int firstNote = argc > 2 ? juce::jlimit (0, 127, (int) std::atol (argv[2])) : 36;
 
     std::cout << "# processBlock cost, worst-case voice load (4 osc, unison, drive, FX)\n";
     std::cout << "# The 'active' column marks runs that use a one-oscillator patch.\n";
@@ -154,7 +159,7 @@ int main (int argc, char** argv)
                     const int activeOscillators = (voices == 16 && unison == 8)
                         ? 2 : 4;
                     const auto m = run (sampleRate, blockSize, voices, unison, mode,
-                                        repeats, activeOscillators);
+                                        repeats, activeOscillators, firstNote);
                     if (! m.finite)
                         anyNonFinite = true;
                     if (m.budgetPercent > worstBudget)

@@ -2,31 +2,84 @@
 """Dependency-free DSP smoke tests for the EEF-JP8000 design equations.
 
 This is intentionally a fast numerical gate rather than a substitute for
-pluginval or listening tests.  It exercises the same PolyBLEP and TPT-SVF
-equations used by the real-time processor at all supported sample rates and
-checks finite output, bounded resonance, and DC control.
+pluginval or listening tests.  It exercises the same band-limited step kernel
+and TPT-SVF equations used by the real-time processor at all supported sample
+rates and checks finite output, bounded resonance, and DC control.
 """
 import math
 import time
 
 
-def blep(t, dt):
-    dt = min(0.49, max(1.0e-5, dt))
-    if t < dt:
-        t /= dt
-        return t + t - t * t - 1.0
-    if t > 1.0 - dt:
-        t = (t - 1.0) / dt
-        return t * t + t + t + 1.0
-    return 0.0
+STEP_TAPS = 64
+STEP_POINTS = 128
+STEP_SIZE = STEP_TAPS * STEP_POINTS + 1
+STEP_BETA = 8.0
+_step_table = None
+
+
+def _sinc(t):
+    return 1.0 if t == 0.0 else math.sin(t) / t
+
+
+def _bessel_i0(x):
+    total = term = 1.0
+    quarter = 0.25 * x * x
+    for k in range(1, 40):
+        term *= quarter / (k * k)
+        total += term
+        if term < total * 1.0e-16:
+            break
+    return total
+
+
+def _build_step_table():
+    """Mirror of StepKernel: the ideal step's residual for x >= 0, in samples."""
+    peak = _bessel_i0(STEP_BETA)
+    table = []
+    z = si = 0.0
+    for n in range(STEP_SIZE):
+        target = math.pi * n / STEP_POINTS
+        dz = (target - z) / 64
+        for s in range(64):
+            a = z + s * dz
+            si += 0.5 * (_sinc(a) + _sinc(a + dz)) * dz
+        z = target
+        reach = n / float(STEP_TAPS * STEP_POINTS)
+        window = _bessel_i0(STEP_BETA * math.sqrt(max(0.0, 1.0 - reach * reach)))
+        table.append((si / math.pi - 0.5) * (window - 1.0) / (peak - 1.0))
+    return table
+
+
+def step_at(x):
+    global _step_table
+    if _step_table is None:
+        _step_table = _build_step_table()
+    points = abs(x) * STEP_POINTS
+    index = int(points)
+    if index >= STEP_SIZE - 1:
+        return 0.0
+    fraction = points - index
+    value = _step_table[index] + fraction * (_step_table[index + 1] - _step_table[index])
+    return -value if x < 0.0 else value
+
+
+def step_correction(phase, inc, jump):
+    reach = int(STEP_TAPS * inc) + 1
+    return jump * sum(step_at((phase - k) / inc) for k in range(-reach, reach + 1))
 
 
 def osc(phase, inc, waveform):
     phase -= math.floor(phase)
+    dt = min(0.49, max(1.0e-5, inc))
     if waveform == 0:
-        return 2.0 * phase - 1.0 + blep(phase, inc)
+        return 2.0 * phase - 1.0 + step_correction(phase, dt, -2.0)
     if waveform == 1:
-        return (1.0 if phase < 0.5 else -1.0) + blep(phase, inc) - blep((phase + 0.5) % 1.0, inc)
+        width_phase = phase + 0.5
+        if width_phase >= 1.0:
+            width_phase -= 1.0
+        return ((1.0 if phase < 0.5 else -1.0)
+                + step_correction(phase, dt, 2.0)
+                + step_correction(width_phase, dt, -2.0))
     if waveform == 2:
         return 1.0 - 4.0 * abs(phase - 0.5)
     return math.sin(2.0 * math.pi * phase)

@@ -21,10 +21,10 @@
 //     measure and reported a clean result either way.
 //
 // What is actually measurable, and what this tool does: compare the oscillator's
-// real output against the ideal band-limited step.  A saw's edge is a step; a
-// PolyBLEP subtracts a two-sample polynomial that cancels the worst of the step's
-// spectral tail.  The residual is measured as the energy in the bins above the
-// nominal band limit, relative to the energy in the wanted band.
+// real output against an ideal band-limited saw.  A saw's aliases fold back onto
+// its own harmonic series, so the energy that betrays a band limiter is the
+// energy that lands *between* the harmonics.  That, plus how far the first
+// sixteen harmonics sit from the ideal 1/n series, is the two columns below.
 
 namespace
 {
@@ -68,13 +68,22 @@ struct BandRow
     double outOfBand = 0.0;
     double outDb = -300.0;
     double outPercent = 0.0;
+    // How far the first sixteen harmonics sit from a 1/n series, in dB.  A
+    // band limiter that softens the top octave buys its numbers here, and that
+    // is not a sound this synth should make.
+    double harmonicDb = 0.0;
     bool finite = true;
 };
 
-// The oscillator band-limits itself at Nyquist, so "out of band" is measured on
-// the top harmonic that a sine of this pitch would put at or above Nyquist.  A
-// clean BLEP leaves a sawtooth residual; the ratio says how much of the signal
-// sits above the nominal limit.
+// Two numbers per note, because one alone was not enough to keep the band
+// limiter honest:
+//
+//  * alias - energy in the audible band (20 Hz to 20 kHz) that is not on a
+//    harmonic.  That is the part a listener hears.
+//  * harmonic deviation - how far each of the first sixteen harmonics is from
+//    the ideal 1/n saw series.  A kernel whose residual is too wide reports a
+//    superb alias figure while quietly deleting the top octave, and this is the
+//    column that catches it.
 BandRow measure (double sampleRate, int mode, int midiNote)
 {
     const double frequency = juce::MidiMessage::getMidiNoteInHertz (midiNote);
@@ -135,44 +144,109 @@ BandRow measure (double sampleRate, int mode, int midiNote)
     if (! row.finite)
         return row;
 
-    // A whole number of cycles, so the sawtooth is periodic in the window and a
-    // plain DFT has no leakage to confuse the reading.  Rounding the cycle count
-    // can ask for slightly more samples than were rendered, and slicing from a
-    // negative offset reads backwards out of the buffer, so the count is floored
-    // until the window actually fits.
-    int cycles = juce::jmax (8, juce::roundToInt (static_cast<double> (total)
-                                                  * frequency / sampleRate));
-    int used = juce::roundToInt (static_cast<double> (cycles) * sampleRate / frequency);
-    while (used > total && cycles > 8)
+    // The last analysisSamples, tapered.  A rectangular window leaves the
+    // fractional-cycle offset of a real note as a skirt, and a loud high
+    // harmonic drags that skirt into the region this tool reads: at 8.4 kHz the
+    // second harmonic alone used to account for twenty times the "alias" power,
+    // so a kernel that deleted the harmonic scored better than one that kept it.
+    std::vector<float> tapered (window.end() - analysisSamples, window.end());
+    const double pi = juce::MathConstants<double>::pi;
+    const size_t last = tapered.size() - 1;
+    for (size_t i = 0; i <= last; ++i)
     {
-        --cycles;
-        used = juce::roundToInt (static_cast<double> (cycles) * sampleRate / frequency);
+        const double x = 2.0 * pi * static_cast<double> (i) / static_cast<double> (last);
+        tapered[i] *= static_cast<float> (0.35875 - 0.48829 * std::cos (x)
+                                          + 0.14128 * std::cos (2.0 * x)
+                                          - 0.01168 * std::cos (3.0 * x));
     }
-    used = juce::jmin (used, total);
-    const std::vector<float> steady (window.begin() + (total - used), window.end());
-    const auto magnitudes = spectrum (steady);
-    const double binHz = sampleRate / static_cast<double> (magnitudes.size() * 2);
-    const int nyquistBin = juce::jmin (static_cast<int> (magnitudes.size()) - 1,
-                                       static_cast<int> (sampleRate * 0.5 / binHz));
-    const int fundamentalBin = juce::jmax (1, juce::roundToInt (frequency / binHz));
-    const int highestRealHarmonic = juce::jmax (1, nyquistBin / fundamentalBin);
-    const int lastRealBin = juce::jmin (nyquistBin - 1, highestRealHarmonic * fundamentalBin + 1);
 
-    double inband = 0.0, outOfBand = 0.0;
+    const auto magnitudes = spectrum (tapered);
+    // spectrum() returns fftSize / 2 + 1 bins, so the transform length is twice
+    // the last index, not twice the count.
+    const double binHz = sampleRate / static_cast<double> (2 * (magnitudes.size() - 1));
+    const int nyquistBin = static_cast<int> (magnitudes.size()) - 1;
+    const int fundamentalBin = juce::jmax (1, juce::roundToInt (frequency / binHz));
+
+    // +/-8 bins covers the Blackman-Harris mainlobe for this length.
+    constexpr int guardBins = 8;
+    const int harmonicCount = juce::jmax (1, (nyquistBin - guardBins) / fundamentalBin);
+    const int audibleTop = juce::jmin (nyquistBin, juce::roundToInt (20000.0 / binHz));
+    // Harmonic deviation is only judged where the voice filter is flat: it runs
+    // wide open at min(20 kHz, 0.40 sr) and its rolloff reaches -1 dB by 7 kHz,
+    // so measuring higher would read the filter as a broken oscillator.
+    const double judgedHarmonicHz = 0.25 * juce::jmin (20000.0, 0.40 * sampleRate);
+    // The output DC blocker sits at 38 Hz, so the fundamental of the low notes
+    // is up to 3.7 dB below its harmonics.  Undo it before comparing them, or
+    // every bass note reads as a broken saw.
+    // shortcut: this corner is a copy of the processor's; a measurement tool
+    // should not fail to build against a header it is only reading, but move it
+    // back to EonMiniEEFProcessor::dcBlockCornerHz once that owns the value.
+    constexpr double outputDcCornerHz = 38.292999;
+    const double dcPole = std::exp (-juce::MathConstants<double>::twoPi
+                                    * outputDcCornerHz / sampleRate);
+    const auto dcGain = [dcPole, sampleRate] (double hz)
+    {
+        const double w = juce::MathConstants<double>::twoPi * hz / sampleRate;
+        return std::sqrt (2.0 - 2.0 * std::cos (w))
+             / std::sqrt (juce::jmax (1.0e-12, 1.0 - 2.0 * dcPole * std::cos (w) + dcPole * dcPole));
+    };
+    // Below this the window is too short to place the fundamental, let alone
+    // measure it.
+    const bool resolvesFundamental = fundamentalBin >= 8;
+    std::vector<bool> isHarmonic (static_cast<size_t> (nyquistBin) + 1, false);
+    double harmonicPower = 0.0, fundamentalPower = 0.0, fundamentalMag = 0.0;
+
+    for (int k = 1; k <= harmonicCount; ++k)
+    {
+        const int centre = juce::roundToInt (k * frequency / binHz);
+        const int first = juce::jmax (1, centre - guardBins);
+        const int final = juce::jmin (nyquistBin, centre + guardBins);
+        double power = 0.0;
+        for (int bin = first; bin <= final; ++bin)
+        {
+            isHarmonic[static_cast<size_t> (bin)] = true;
+            const double m = magnitudes[static_cast<size_t> (bin)];
+            power += m * m;
+        }
+        if (k == 1)
+        {
+            fundamentalPower = power;
+            fundamentalMag = std::sqrt (power) / dcGain (frequency);
+        }
+        harmonicPower += power;
+        if (k > 1 && k <= 16 && resolvesFundamental && k * frequency <= judgedHarmonicHz)
+        {
+            // An ideal saw's k-th harmonic is 1/k of its first, so the measured
+            // ratio should come to k.
+            const double ratio = std::sqrt (power) / dcGain (k * frequency) * k
+                                 / juce::jmax (1.0e-15, fundamentalMag);
+            row.harmonicDb = juce::jmax (row.harmonicDb, std::abs (toDb (ratio)));
+        }
+    }
+
+    double aliasPower = 0.0;
+    // Bin 3 is the low edge of the window's own skirt; nothing musical lives
+    // there for these pitches.
+    for (int bin = 3; bin <= audibleTop; ++bin)
+    {
+        if (isHarmonic[static_cast<size_t> (bin)])
+            continue;
+        const double m = magnitudes[static_cast<size_t> (bin)];
+        aliasPower += m * m;
+    }
+
+    row.inband = std::sqrt (harmonicPower);
+    row.outOfBand = std::sqrt (aliasPower);
+    // Referenced to the whole signal, not just the counted harmonics, so a
+    // kernel that loses level does not also get a quieter alias figure.
+    double signalPower = 0.0;
     for (int bin = 1; bin <= nyquistBin; ++bin)
     {
-        const double power = magnitudes[static_cast<size_t> (bin)]
-                           * magnitudes[static_cast<size_t> (bin)];
-        inband += power;
-        // Energy above the last harmonic the pitch should have: only a wrap can
-        // put anything here, so it is the aliasing figure the plan asks for.
-        if (bin > lastRealBin)
-            outOfBand += power;
+        const double m = magnitudes[static_cast<size_t> (bin)];
+        signalPower += m * m;
     }
-    row.inband = std::sqrt (inband);
-    row.outOfBand = std::sqrt (outOfBand);
-    row.outPercent = 100.0 * row.outOfBand / juce::jmax (1.0e-15, row.inband);
-    row.outDb = toDb (row.outOfBand / juce::jmax (1.0e-15, row.inband));
+    row.outPercent = 100.0 * aliasPower / juce::jmax (1.0e-30, signalPower);
+    row.outDb = toDb (std::sqrt (aliasPower / juce::jmax (1.0e-30, signalPower)));
     return row;
 }
 } // namespace
@@ -189,12 +263,14 @@ int main (int argc, char** argv)
         24, 36, 48, 60, 67, 72, 79, 84, 88, 90, 93, 96, 99, 102, 105, 108, 120
     };
 
-    std::cout << "# Saw band-limit: residual energy above the pitch's harmonic series, dB below the wanted band\n";
-    std::cout << "# Whole cycles are used so a plain DFT has no leakage skirt.\n";
-    std::cout << "| note | Hz | sr | quality | in-band | out-of-band dB | out % |\n";
-    std::cout << "|---|---|---|---|---|---|---|\n";
+    std::cout << "# Saw band-limit: audible-band alias and harmonic fidelity\n";
+    std::cout << "# alias = energy below 20 kHz that is not on a harmonic of the note\n";
+    std::cout << "# dev = worst deviation of harmonics 2-16 from the ideal 1/n series\n";
+    std::cout << "| note | Hz | sr | quality | harmonics | alias dB | alias % | dev dB |\n";
+    std::cout << "|---|---|---|---|---|---|---|---|\n";
 
     double worstPercent = 0.0;
+    double worstHarmonicDb = 0.0;
     double worstFrequency = 0.0;
     int worstSampleRate = 0;
     bool anyNonFinite = false;
@@ -217,13 +293,15 @@ int main (int argc, char** argv)
                     worstFrequency = row.frequency;
                     worstSampleRate = static_cast<int> (sampleRate);
                 }
+                worstHarmonicDb = juce::jmax (worstHarmonicDb, row.harmonicDb);
                 std::cout << "| " << midiNote
                           << " | " << row.frequency
                           << " | " << sampleRate
                           << " | " << modeNames[modeIndex]
                           << " | " << row.inband
                           << " | " << row.outDb
-                          << " | " << row.outPercent << " |\n";
+                          << " | " << row.outPercent
+                          << " | " << row.harmonicDb << " |\n";
             }
         }
     }
@@ -233,20 +311,20 @@ int main (int argc, char** argv)
         std::cerr << "band-limit sweep produced non-finite output\n";
         return 1;
     }
-    // The four-sample residual rolls off with pitch; measured worst case is
-    // 0.28% at 8.4 kHz / 48 kHz.  A 5% gate leaves twentyfold headroom while
-    // still catching a band limiter that stopped working.
-    if (worstPercent > 5.0)
+    // Measured with this kernel: 0.004% worst alias and 0.1 dB worst harmonic
+    // deviation.  The gate sits an order of magnitude above that, which still
+    // fails the four-point sensor it replaced (0.14% alias, 35 dB deviation).
+    if (worstPercent > 0.02 || worstHarmonicDb > 1.5)
     {
-        std::cerr << "band-limit sweep: " << worstPercent
-                  << "% of the energy sits outside the pitch's harmonic series,"
-                  << " which is beyond the measured PolyBLEP rolloff\n";
+        std::cerr << "band-limit sweep: worst " << worstPercent
+                  << "% audible-band alias and " << worstHarmonicDb
+                  << " dB harmonic deviation, above the 0.02% / 1.5 dB gate\n";
         return 1;
     }
     std::cout << "band-limit sweep: PASS (worst " << worstPercent
-              << "% outside the harmonic series, all outputs finite)\n"
-              << "# Note: the four-sample residual still rises with pitch.\n"
-              << "# Worst case: " << worstFrequency << " Hz at " << worstSampleRate
-              << " Hz sample rate.\n";
+              << "% audible-band alias, " << worstHarmonicDb
+              << " dB harmonic deviation, all outputs finite)\n"
+              << "# Worst alias case: " << worstFrequency << " Hz at "
+              << worstSampleRate << " Hz sample rate.\n";
     return 0;
 }
