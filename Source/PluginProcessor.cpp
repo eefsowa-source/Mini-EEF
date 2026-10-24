@@ -125,9 +125,14 @@ namespace
     {
         const auto& kernel = stepKernel();
         const int reach = static_cast<int> (stepKernelTaps * increment) + 1;
+        // One reciprocal instead of a divide per edge (reach is 1 near the top
+        // of the range, so this is three divides saved per oscillator).  The
+        // 1 ulp it differs from the exact quotient is far below the table's
+        // own 1/128-sample resolution.
+        const float invIncrement = 1.0f / increment;
         float sum = 0.0f;
         for (int k = -reach; k <= reach; ++k)
-            sum += kernel.at ((phase - static_cast<float> (k)) / increment);
+            sum += kernel.at ((phase - static_cast<float> (k)) * invIncrement);
         return jump * sum;
     }
 
@@ -396,6 +401,67 @@ public:
                       p.apvts.getRawParameterValue (ParamIDs::filterDecay),
                       p.apvts.getRawParameterValue (ParamIDs::filterSustain),
                       p.apvts.getRawParameterValue (ParamIDs::filterRelease) };
+
+        // The rest of the parameter list, for the same reason: each of these
+        // was rebuilt as a juce::String and compared against the parameter
+        // map names every block, in every voice.
+        constexpr std::array<const char*, 4> waveIds {
+            ParamIDs::osc1Wave, ParamIDs::osc2Wave, ParamIDs::osc3Wave, ParamIDs::osc4Wave
+        };
+        constexpr std::array<const char*, 4> levelIds {
+            ParamIDs::osc1Level, ParamIDs::osc2Level, ParamIDs::osc3Level, ParamIDs::osc4Level
+        };
+        constexpr std::array<const char*, 4> coarseIds {
+            ParamIDs::osc1Coarse, ParamIDs::osc2Coarse, ParamIDs::osc3Coarse, ParamIDs::osc4Coarse
+        };
+        constexpr std::array<const char*, 4> fineIds {
+            ParamIDs::osc1Fine, ParamIDs::osc2Fine, ParamIDs::osc3Fine, ParamIDs::osc4Fine
+        };
+        constexpr std::array<const char*, 4> panIds {
+            ParamIDs::osc1Pan, ParamIDs::osc2Pan, ParamIDs::osc3Pan, ParamIDs::osc4Pan
+        };
+        constexpr std::array<const char*, 4> pulseWidthIds {
+            ParamIDs::osc1PulseWidth, ParamIDs::osc2PulseWidth,
+            ParamIDs::osc3PulseWidth, ParamIDs::osc4PulseWidth
+        };
+        for (size_t oscillator = 0; oscillator < 4; ++oscillator)
+        {
+            parameterPointers.oscWave[oscillator] = p.apvts.getRawParameterValue (waveIds[oscillator]);
+            parameterPointers.level[oscillator] = p.apvts.getRawParameterValue (levelIds[oscillator]);
+            parameterPointers.coarse[oscillator] = p.apvts.getRawParameterValue (coarseIds[oscillator]);
+            parameterPointers.fine[oscillator] = p.apvts.getRawParameterValue (fineIds[oscillator]);
+            parameterPointers.pan[oscillator] = p.apvts.getRawParameterValue (panIds[oscillator]);
+            parameterPointers.pulseWidth[oscillator] = p.apvts.getRawParameterValue (pulseWidthIds[oscillator]);
+            parameterPointers.modSource[oscillator]
+                = p.apvts.getRawParameterValue (ParamIDs::modSource (static_cast<int> (oscillator)));
+            parameterPointers.modDestination[oscillator]
+                = p.apvts.getRawParameterValue (ParamIDs::modDestination (static_cast<int> (oscillator)));
+            parameterPointers.modAmount[oscillator]
+                = p.apvts.getRawParameterValue (ParamIDs::modAmount (static_cast<int> (oscillator)));
+        }
+
+        parameterPointers.noiseMix = p.apvts.getRawParameterValue (ParamIDs::noiseMix);
+        parameterPointers.subOscLevel = p.apvts.getRawParameterValue (ParamIDs::subOscLevel);
+        parameterPointers.oscSync = p.apvts.getRawParameterValue (ParamIDs::oscSync);
+        parameterPointers.unisonVoices = p.apvts.getRawParameterValue (ParamIDs::unisonVoices);
+        parameterPointers.unisonDetune = p.apvts.getRawParameterValue (ParamIDs::unisonDetune);
+        parameterPointers.unisonSpread = p.apvts.getRawParameterValue (ParamIDs::unisonSpread);
+        parameterPointers.cutoff = p.apvts.getRawParameterValue (ParamIDs::cutoff);
+        parameterPointers.resonance = p.apvts.getRawParameterValue (ParamIDs::resonance);
+        parameterPointers.filterDrive = p.apvts.getRawParameterValue (ParamIDs::filterDrive);
+        parameterPointers.filterMode = p.apvts.getRawParameterValue (ParamIDs::filterMode);
+        parameterPointers.gain = p.apvts.getRawParameterValue (ParamIDs::gain);
+        parameterPointers.lfoRate = p.apvts.getRawParameterValue (ParamIDs::lfoRate);
+        parameterPointers.lfoDepth = p.apvts.getRawParameterValue (ParamIDs::lfoDepth);
+        parameterPointers.lfoPitch = p.apvts.getRawParameterValue (ParamIDs::lfoPitch);
+        parameterPointers.amDepth = p.apvts.getRawParameterValue (ParamIDs::amDepth);
+        parameterPointers.velocityAmount = p.apvts.getRawParameterValue (ParamIDs::velocityAmount);
+        parameterPointers.lfoSync = p.apvts.getRawParameterValue (ParamIDs::lfoSync);
+        parameterPointers.lfoDivision = p.apvts.getRawParameterValue (ParamIDs::lfoDivision);
+        parameterPointers.lfoShape = p.apvts.getRawParameterValue (ParamIDs::lfoShape);
+        parameterPointers.unisonDrift = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
+        parameterPointers.envCurve = p.apvts.getRawParameterValue (ParamIDs::envCurve);
+        parameterPointers.filterEnvAmount = p.apvts.getRawParameterValue (ParamIDs::filterEnvAmount);
     }
 
     bool canPlaySound (juce::SynthesiserSound* sound) override
@@ -699,67 +765,49 @@ public:
         // repeatedly touching the parameter tree in the sample loop.
         updateEnvelopeParameters();
 
-        auto* w1 = p.apvts.getRawParameterValue (ParamIDs::osc1Wave);
-        auto* w2 = p.apvts.getRawParameterValue (ParamIDs::osc2Wave);
-        auto* w3 = p.apvts.getRawParameterValue (ParamIDs::osc3Wave);
-        auto* w4 = p.apvts.getRawParameterValue (ParamIDs::osc4Wave);
-        constexpr std::array<const char*, 4> levelIds {
-            ParamIDs::osc1Level, ParamIDs::osc2Level, ParamIDs::osc3Level, ParamIDs::osc4Level
-        };
-        constexpr std::array<const char*, 4> coarseIds {
-            ParamIDs::osc1Coarse, ParamIDs::osc2Coarse, ParamIDs::osc3Coarse, ParamIDs::osc4Coarse
-        };
-        constexpr std::array<const char*, 4> fineIds {
-            ParamIDs::osc1Fine, ParamIDs::osc2Fine, ParamIDs::osc3Fine, ParamIDs::osc4Fine
-        };
-        constexpr std::array<const char*, 4> panIds {
-            ParamIDs::osc1Pan, ParamIDs::osc2Pan, ParamIDs::osc3Pan, ParamIDs::osc4Pan
-        };
-        constexpr std::array<const char*, 4> pulseWidthIds {
-            ParamIDs::osc1PulseWidth, ParamIDs::osc2PulseWidth, ParamIDs::osc3PulseWidth, ParamIDs::osc4PulseWidth
-        };
-        std::array<std::atomic<float>*, 4> levelParams {}, coarseParams {}, fineParams {}, panParams {}, pulseWidthParams {};
+        // Every pointer here was resolved in the constructor; see
+        // ParameterPointers.  Reading them is a member load, not a lookup.
+        auto* w1 = parameterPointers.oscWave[0];
+        auto* w2 = parameterPointers.oscWave[1];
+        auto* w3 = parameterPointers.oscWave[2];
+        auto* w4 = parameterPointers.oscWave[3];
+        const auto& levelParams = parameterPointers.level;
+        const auto& coarseParams = parameterPointers.coarse;
+        const auto& fineParams = parameterPointers.fine;
+        const auto& panParams = parameterPointers.pan;
+        const auto& pulseWidthParams = parameterPointers.pulseWidth;
         for (size_t oscillator = 0; oscillator < 4; ++oscillator)
         {
-            levelParams[oscillator] = p.apvts.getRawParameterValue (levelIds[oscillator]);
-            coarseParams[oscillator] = p.apvts.getRawParameterValue (coarseIds[oscillator]);
-            fineParams[oscillator] = p.apvts.getRawParameterValue (fineIds[oscillator]);
-            panParams[oscillator] = p.apvts.getRawParameterValue (panIds[oscillator]);
-            pulseWidthParams[oscillator] = p.apvts.getRawParameterValue (pulseWidthIds[oscillator]);
             levelSmooth[oscillator].setTargetValue (levelParams[oscillator]->load());
             fineSmooth[oscillator].setTargetValue (fineParams[oscillator]->load());
             panSmooth[oscillator].setTargetValue (panParams[oscillator]->load());
             pulseWidthSmooth[oscillator].setTargetValue (pulseWidthParams[oscillator]->load());
         }
-        auto* noiseMixParam = p.apvts.getRawParameterValue (ParamIDs::noiseMix);
-        auto* subOscParam = p.apvts.getRawParameterValue (ParamIDs::subOscLevel);
-        auto* oscSyncParam = p.apvts.getRawParameterValue (ParamIDs::oscSync);
-        auto* unisonVoicesParam = p.apvts.getRawParameterValue (ParamIDs::unisonVoices);
-        auto* unisonDetuneParam = p.apvts.getRawParameterValue (ParamIDs::unisonDetune);
-        auto* unisonSpreadParam = p.apvts.getRawParameterValue (ParamIDs::unisonSpread);
-        auto* cutoff = p.apvts.getRawParameterValue (ParamIDs::cutoff);
-        auto* resonance = p.apvts.getRawParameterValue (ParamIDs::resonance);
-        auto* filterDriveParam = p.apvts.getRawParameterValue (ParamIDs::filterDrive);
-        auto* filterMode = p.apvts.getRawParameterValue (ParamIDs::filterMode);
-        auto* gain = p.apvts.getRawParameterValue (ParamIDs::gain);
-        auto* lfoRate = p.apvts.getRawParameterValue (ParamIDs::lfoRate);
-        auto* lfoDepth = p.apvts.getRawParameterValue (ParamIDs::lfoDepth);
-        auto* lfoPitch = p.apvts.getRawParameterValue (ParamIDs::lfoPitch);
-        auto* amDepthParam = p.apvts.getRawParameterValue (ParamIDs::amDepth);
-        auto* velocityAmount = p.apvts.getRawParameterValue (ParamIDs::velocityAmount);
-        auto* lfoSync = p.apvts.getRawParameterValue (ParamIDs::lfoSync);
-        auto* lfoDivision = p.apvts.getRawParameterValue (ParamIDs::lfoDivision);
-        auto* lfoShape = p.apvts.getRawParameterValue (ParamIDs::lfoShape);
-        auto* unisonDriftParam = p.apvts.getRawParameterValue (ParamIDs::unisonDrift);
-        auto* envCurveParam = p.apvts.getRawParameterValue (ParamIDs::envCurve);
-        auto* filterEnvAmountParam = p.apvts.getRawParameterValue (ParamIDs::filterEnvAmount);
-        std::array<std::atomic<float>*, 4> modSourceParams {}, modDestinationParams {}, modAmountParams {};
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            modSourceParams[static_cast<size_t> (slot)] = p.apvts.getRawParameterValue (ParamIDs::modSource (slot));
-            modDestinationParams[static_cast<size_t> (slot)] = p.apvts.getRawParameterValue (ParamIDs::modDestination (slot));
-            modAmountParams[static_cast<size_t> (slot)] = p.apvts.getRawParameterValue (ParamIDs::modAmount (slot));
-        }
+        auto* noiseMixParam = parameterPointers.noiseMix;
+        auto* subOscParam = parameterPointers.subOscLevel;
+        auto* oscSyncParam = parameterPointers.oscSync;
+        auto* unisonVoicesParam = parameterPointers.unisonVoices;
+        auto* unisonDetuneParam = parameterPointers.unisonDetune;
+        auto* unisonSpreadParam = parameterPointers.unisonSpread;
+        auto* cutoff = parameterPointers.cutoff;
+        auto* resonance = parameterPointers.resonance;
+        auto* filterDriveParam = parameterPointers.filterDrive;
+        auto* filterMode = parameterPointers.filterMode;
+        auto* gain = parameterPointers.gain;
+        auto* lfoRate = parameterPointers.lfoRate;
+        auto* lfoDepth = parameterPointers.lfoDepth;
+        auto* lfoPitch = parameterPointers.lfoPitch;
+        auto* amDepthParam = parameterPointers.amDepth;
+        auto* velocityAmount = parameterPointers.velocityAmount;
+        auto* lfoSync = parameterPointers.lfoSync;
+        auto* lfoDivision = parameterPointers.lfoDivision;
+        auto* lfoShape = parameterPointers.lfoShape;
+        auto* unisonDriftParam = parameterPointers.unisonDrift;
+        auto* envCurveParam = parameterPointers.envCurve;
+        auto* filterEnvAmountParam = parameterPointers.filterEnvAmount;
+        const auto& modSourceParams = parameterPointers.modSource;
+        const auto& modDestinationParams = parameterPointers.modDestination;
+        const auto& modAmountParams = parameterPointers.modAmount;
         // A slot with no destination or a zeroed amount contributes exactly
         // zero, so it is skipped for the whole block; one block of latency on
         // a slot that activates mid-block is below the automation grain.
@@ -1539,6 +1587,44 @@ private:
     float bendTarget = 1.0f, bendCoeff = 0.0f;
     juce::ADSR filterEnv;
     float filterEnvAmount = 0.0f;
+    // Resolved once in the constructor: the parameter list never changes
+    // after construction, and re-walking it per block cost a juce::String
+    // construction and a name comparison per pointer, per voice.
+    struct ParameterPointers
+    {
+        std::atomic<float>* oscWave[4] {};
+        std::atomic<float>* level[4] {};
+        std::atomic<float>* coarse[4] {};
+        std::atomic<float>* fine[4] {};
+        std::atomic<float>* pan[4] {};
+        std::atomic<float>* pulseWidth[4] {};
+        std::atomic<float>* modSource[4] {};
+        std::atomic<float>* modDestination[4] {};
+        std::atomic<float>* modAmount[4] {};
+        std::atomic<float>* noiseMix {};
+        std::atomic<float>* subOscLevel {};
+        std::atomic<float>* oscSync {};
+        std::atomic<float>* unisonVoices {};
+        std::atomic<float>* unisonDetune {};
+        std::atomic<float>* unisonSpread {};
+        std::atomic<float>* cutoff {};
+        std::atomic<float>* resonance {};
+        std::atomic<float>* filterDrive {};
+        std::atomic<float>* filterMode {};
+        std::atomic<float>* gain {};
+        std::atomic<float>* lfoRate {};
+        std::atomic<float>* lfoDepth {};
+        std::atomic<float>* lfoPitch {};
+        std::atomic<float>* amDepth {};
+        std::atomic<float>* velocityAmount {};
+        std::atomic<float>* lfoSync {};
+        std::atomic<float>* lfoDivision {};
+        std::atomic<float>* lfoShape {};
+        std::atomic<float>* unisonDrift {};
+        std::atomic<float>* envCurve {};
+        std::atomic<float>* filterEnvAmount {};
+    };
+    ParameterPointers parameterPointers;
     std::array<std::atomic<float>*, 8> envParams {};
     std::array<juce::SmoothedValue<float>, 4> levelSmooth, fineSmooth, panSmooth, pulseWidthSmooth;
     // Cached equal-power pan gains.  panSmooth ramps over 5 ms, so after the
