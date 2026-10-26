@@ -16,9 +16,31 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Configure and build
-        run: cmake -B Build -DCMAKE_BUILD_TYPE=Release && cmake --build Build --config Release
+      - name: Configure
+        run: cmake -B Build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build Build --config Release --parallel
+      # The five CTest entries registered in CMakeLists.txt are the repository's
+      # actual regression gate.  Running them here keeps a red local `ctest`
+      # from reaching a green CI.
+      - name: CTest
+        run: |
+          set -o pipefail
+          mkdir -p Build/ci-logs
+          ctest --test-dir Build -C Release --output-on-failure 2>&1 | tee Build/ci-logs/ctest.log
       - name: Install pluginval
         run: brew install --cask pluginval
       - name: Validate VST3
-        run: ./scripts/run_pluginval.sh
+        run: |
+          set -o pipefail
+          mkdir -p Build/ci-logs
+          ./scripts/run_pluginval.sh 2>&1 | tee Build/ci-logs/pluginval.log
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-validation-logs
+          path: |
+            Build/ci-logs/*.log
+            Build/**/pluginval*.log
+          if-no-files-found: warn
