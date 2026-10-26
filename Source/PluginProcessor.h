@@ -95,7 +95,7 @@ public:
 private:
     std::atomic<bool> oversamplingActive { false };
     std::atomic<float>* driveCurveParameter = nullptr;
-    void processOversampledOutput (juce::AudioBuffer<float>&, float) noexcept;
+    void processOversampledOutput (juce::AudioBuffer<float>&, float, int) noexcept;
     std::unique_ptr<juce::Synthesiser> synth;
     double sampleRate = 44100.0;
     juce::AudioBuffer<float> fxDelay;

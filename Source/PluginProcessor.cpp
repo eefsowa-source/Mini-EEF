@@ -2031,11 +2031,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout EonMiniEEFProcessor::createP
     return { parameters.begin(), parameters.end() };
 }
 void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& buffer,
-                                                    float driveAmount) noexcept
+                                                    float driveAmount, int mode) noexcept
 {
-    const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
-    const int mode = modeParameter != nullptr
-        ? juce::jlimit (0, 3, juce::roundToInt (modeParameter->load())) : 0;
     const bool willOversample = mode != 0;
 
     // A host may legally deliver a block larger than the prepareToPlay hint.
@@ -2282,11 +2279,16 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
     // oversampled path owns when a quality mode is active.  A host block
     // larger than the prepare hint falls back to the 1x stage rather than
     // resizing on the audio thread.
+    // One read per block: processOversampledOutput below must see the same
+    // mode this decision used, or a quality switch landing between the two
+    // reads would let one block skip the saturation stage entirely or drive
+    // it twice.  The value is latched here and passed down unchanged.
+    int latchedOversamplingMode = 0;
     {
         const auto* modeParameter = apvts.getRawParameterValue (ParamIDs::oversampling);
-        const int mode = modeParameter != nullptr
+        latchedOversamplingMode = modeParameter != nullptr
             ? juce::jlimit (0, 3, juce::roundToInt (modeParameter->load())) : 0;
-        oversamplingActive.store (mode != 0
+        oversamplingActive.store (latchedOversamplingMode != 0
             && b.getNumSamples() > 0
             && b.getNumSamples() <= oversamplingBlockSize,
             std::memory_order_relaxed);
@@ -2542,7 +2544,7 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             else blockPeakR = juce::jmax (blockPeakR, std::abs (output));
         }
         fxWritePosition=(fxWritePosition+1)%fxDelay.getNumSamples();}
-    processOversampledOutput (b, driveAmount);
+    processOversampledOutput (b, driveAmount, latchedOversamplingMode);
     peakLeft.store (blockPeakL);
     peakRight.store (blockPeakR);
 }
