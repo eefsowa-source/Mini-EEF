@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace
 {
@@ -1045,11 +1046,46 @@ int runDcPoleRateRegression()
             return 1;
         }
     }
-    if (EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::dcBlockCornerHz) != 0.995f
-        || EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::asymHpCornerHz) != 0.9993f)
+    // Exact float equality would couple this check to one libm's exp()
+    // rounding: a toolchain bump could shift the pole by one ULP and turn CI
+    // red with no audible change (the DSP calls the same function at runtime).
+    // One ULP in either direction is still the legacy corner for every
+    // practical purpose, so that is the gate.
+    const auto withinOneUlpOf = [] (float reference, float value)
     {
-        std::cerr << "48 kHz DC poles are no longer bit-identical to the legacy constants\n";
+        return value == reference
+            || value == std::nextafter (reference, std::numeric_limits<float>::infinity())
+            || value == std::nextafter (reference, -std::numeric_limits<float>::infinity());
+    };
+    if (! withinOneUlpOf (0.995f, EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::dcBlockCornerHz))
+        || ! withinOneUlpOf (0.9993f, EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::asymHpCornerHz)))
+    {
+        std::cerr << "48 kHz DC poles drifted more than one float ULP from the legacy constants\n";
         return 1;
+    }
+    return 0;
+}
+
+// dcPoleForRate() is pure math; the derived poles only reach the audio path if
+// prepareToPlay actually refreshes the member coefficients.  The members
+// default to the legacy 48 kHz constants and every other render here runs at
+// 48 kHz, where they coincide, so a broken hookup would pass every audio
+// regression while keeping the old poles at 44.1/96/192 kHz sessions.  Both
+// sides of each comparison call the same static with the same arguments, so
+// exact equality is portable in this check.
+int runDcCoeffPrepareHookupRegression()
+{
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        EonMiniEEFProcessor probe;
+        probe.prepareToPlay (rate, 256);
+        if (probe.dcBlockCoeff != EonMiniEEFProcessor::dcPoleForRate (rate, EonMiniEEFProcessor::dcBlockCornerHz)
+            || probe.asymHpCoeff != EonMiniEEFProcessor::dcPoleForRate (rate, EonMiniEEFProcessor::asymHpCornerHz))
+        {
+            std::cerr << "prepareToPlay left the DC poles at their 48 kHz defaults for "
+                      << rate << " Hz sessions\n";
+            return 1;
+        }
     }
     return 0;
 }
@@ -1059,6 +1095,8 @@ int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     if (runDcPoleRateRegression() != 0)
+        return 1;
+    if (runDcCoeffPrepareHookupRegression() != 0)
         return 1;
     if (runMonoNotePriorityRegression() != 0)
         return 1;
