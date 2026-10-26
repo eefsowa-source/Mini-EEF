@@ -1026,11 +1026,40 @@ int runQuadTapChorusRegression()
     }
     return 0;
 }
+
+// The two DC killers are poles derived from the rate they run at.  Every other
+// render here is 48 kHz, where the derived poles equal the legacy constants, so
+// without this check a revert to a fixed pole would pass every other test.
+int runDcPoleRateRegression()
+{
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const double pole = EonMiniEEFProcessor::dcPoleForRate (
+            rate, EonMiniEEFProcessor::dcBlockCornerHz);
+        const double corner = -std::log (pole) * rate
+            / (2.0 * juce::MathConstants<double>::pi);
+        if (std::abs (corner - EonMiniEEFProcessor::dcBlockCornerHz) > 0.01)
+        {
+            std::cerr << "DC blocker corner drifted to " << corner
+                      << " Hz at " << rate << " Hz\n";
+            return 1;
+        }
+    }
+    if (EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::dcBlockCornerHz) != 0.995f
+        || EonMiniEEFProcessor::dcPoleForRate (48000.0, EonMiniEEFProcessor::asymHpCornerHz) != 0.9993f)
+    {
+        std::cerr << "48 kHz DC poles are no longer bit-identical to the legacy constants\n";
+        return 1;
+    }
+    return 0;
+}
 }
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
+    if (runDcPoleRateRegression() != 0)
+        return 1;
     if (runMonoNotePriorityRegression() != 0)
         return 1;
     if (runOversampledDriveAliasingRegression() != 0)

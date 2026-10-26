@@ -53,11 +53,45 @@ public:
     // stage) and gentle amp-stage saturation. Both are pure, allocation-free.
     // The channel index selects the per-channel DC-killer state for the
     // asymmetric curve, so stereo and any 1x master-bus use stay independent.
+    // hpCoeff is the one-pole pole for the rate the curve is actually
+    // evaluated at: the host rate on the 1x path, 2x/4x/8x inside the
+    // oversampled stage.
     float applyDriveCurve (float input, float gainMultiplier, int curveMode,
-                           int channel) noexcept;
+                           int channel, float hpCoeff) noexcept;
     static float applyAmpSaturation (float input, float amount) noexcept;
     void resetDriveCurveState() noexcept;
     std::array<float, 2> asymHpX {}, asymHpY {};
+    // Both one-pole DC killers used to carry a 48 kHz constant: the
+    // asymmetric curve's highpass was 0.9993 and the final master blocker
+    // 0.995.  A fixed pole is a corner that scales with the sample rate, so
+    // at 96 kHz the master highpass moved from ~38 Hz to ~76 Hz and ate real
+    // bass, and inside the 8x stage the curve's ~5 Hz killer sat at ~43 Hz.
+    // Each pole is now derived from the rate the code actually runs at.  The
+    // corners below are the values the 48 kHz constants were tuned at, so 48
+    // kHz stays bit-identical and every other rate keeps that corner instead
+    // of scaling it.
+    //
+    // Known, deliberate side effect: at 44.1 kHz the old fixed 0.995 pole
+    // sat at 35.18 Hz, so pinning the corner to 38.29 Hz costs a small
+    // amount of sub-bass there (-0.34 dB at 40 Hz, -0.13 dB at 80 Hz).
+    // That is the price of one consistent corner; the alternative is a
+    // blocker whose frequency changes with the session rate.
+    static constexpr float asymHpCornerHz = 5.349479f;   // 0.9993 pole at 48 kHz
+    static constexpr float dcBlockCornerHz = 38.292999f; // 0.995 pole at 48 kHz
+    float asymHpCoeff = 0.9993f;
+    float dcBlockCoeff = 0.995f;
+    static float dcPoleForRate (double rate, float cornerHz) noexcept
+    {
+        const float safeRate = static_cast<float> (juce::jmax (8000.0, rate));
+        return std::exp (-juce::MathConstants<float>::twoPi * cornerHz / safeRate);
+    }
+    // Refresh the host-rate poles.  Called from prepareToPlay so both killers
+    // track the session rate instead of the rate their constants were tuned at.
+    void updateDcFilterCoefficients() noexcept
+    {
+        dcBlockCoeff = dcPoleForRate (sampleRate, dcBlockCornerHz);
+        asymHpCoeff = dcPoleForRate (sampleRate, asymHpCornerHz);
+    }
 private:
     std::atomic<bool> oversamplingActive { false };
     std::atomic<float>* driveCurveParameter = nullptr;

@@ -31,16 +31,17 @@
   50% square가 레이어별로 프리필터 믹스에 센터로 합산. 위상은 다른
   오실레이터와 같은 seed/free-run 규칙을 따른다
 - 내부 drive, chorus/delay/reverb, DC blocker, soft limiter, peak meter
-- 1x/2x/4x oversampling 선택 (drive nonlinear stage)
+- 1x/2x/4x/8x oversampling 선택 (drive nonlinear stage). 8x는 half-band polyphase
+  IIR 3단 체인이고 prepareToPlay에서 세 체인을 모두 초기화·리셋한다
 - APVTS 파라미터와 project/preset 상태 XML 저장
-- Init과 5개 신스 패치(Supersaw Pad, Trance Pluck, Arena Lead, Sub Mono Bass, Acid Bass)
+- Init과 신스 패치 34개(Supersaw Pad, Trance Pluck, Arena Lead, Sub Mono Bass, Acid Bass 등)
 - processBlock 내 동적 할당·I/O·UI 호출 없음
 
 ## 신호 경로
 
-`MIDI Note On/Off → voice allocation → Oscillator pair → mixer → per-voice filter drive → per-voice LPF → ADSR → output`
+`MIDI Note On/Off → voice allocation → Oscillator pair → mixer → per-voice filter drive → per-voice LPF → ADSR → voice sum → chorus/delay/reverb → DC blocker → master-bus drive → amp saturation → soft limiter → output`
 
-각 voice는 oscillator phase, envelope, filter state를 독립적으로 보유한다. voice allocator는 idle voice, release voice, oldest voice 순서로 선택한다. Pitch bend, aftertouch, sustain pedal, CC mapping과 MIDI Learn은 처리하지 않는다.
+각 voice는 oscillator phase, envelope, filter state를 독립적으로 보유한다. voice allocator는 idle voice, release voice, oldest voice 순서로 선택한다. 드라이브 위치는 품질 모드와 무관하게 마스터 버스 한 곳이다. 1x에서는 drive 커브·앰프 새추레이션·soft limiter가 호스트 레이트의 마스터 버스에서 돌고, 2x/4x/8x에서는 같은 세 단계가 oversampling 스테이지 안에서 호스트 레이트보다 높은 레이트로 돌아 폴드 성분이 대역 밖으로 밀린다. 보이스 안에 남는 비선형은 필터 드라이브뿐이다. Pitch bend(채널별 ±2 semitone, 5 ms smoothing)와 CC64 sustain pedal은 처리하고, aftertouch·CC mapping·MIDI Learn은 처리하지 않는다.
 
 ## 다음 구현 순서
 
@@ -60,5 +61,6 @@
 
 ```sh
 python3 scripts/run_dsp_sanity.py
+ctest --test-dir Build -C Release --output-on-failure
 PLUGINVAL_BIN=/path/to/pluginval ./scripts/run_pluginval.sh
 ```

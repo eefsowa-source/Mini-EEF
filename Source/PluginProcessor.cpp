@@ -2062,6 +2062,12 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
         {
             const float gain = 1.0f + 4.0f * amount;
             const int curveMode = selectedDriveCurve();
+            // The asymmetric curve's DC killer must see the rate this loop
+            // actually runs at: 2x, 4x or 8x the host rate.  A fixed 48 kHz
+            // pole here would put its corner at ~10/21/43 Hz respectively.
+            const float oversampledRate = sampleRate
+                * static_cast<double> (1 << juce::jlimit (1, 3, mode));
+            const float curveHpCoeff = dcPoleForRate (oversampledRate, asymHpCornerHz);
             for (size_t channel = 0; channel < highRateBlock.getNumChannels(); ++channel)
             {
                 auto* samples = highRateBlock.getChannelPointer (channel);
@@ -2069,7 +2075,8 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
                 {
                     const float input = std::isfinite (samples[sample]) ? samples[sample] : 0.0f;
                     const float shaped = applyDriveCurve (input, gain, curveMode,
-                                                          static_cast<int> (channel));
+                                                          static_cast<int> (channel),
+                                                          curveHpCoeff);
                     samples[sample] = std::isfinite (shaped) ? shaped : 0.0f;
                 }
             }
@@ -2135,7 +2142,8 @@ void EonMiniEEFProcessor::processOversampledOutput (juce::AudioBuffer<float>& bu
 }
 
 float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
-                                            int curveMode, int channel) noexcept
+                                            int curveMode, int channel,
+                                            float hpCoeff) noexcept
 {
     // Mode 0 preserves the legacy symmetric tanh() so drive=0 presets and
     // the THD baseline report stay bit-comparable.
@@ -2152,11 +2160,14 @@ float EonMiniEEFProcessor::applyDriveCurve (float input, float gainMultiplier,
                            - std::tanh (0.09f * gainMultiplier * 0.95f);
         // Renormalise so quiet passages keep roughly the legacy loudness.
         float output = shaped * 1.06f;
-        // Per-curve one-pole highpass at ~5 Hz. Coefficient computed inline:
-        // y[n] = 0.9993 * (y[n-1] + x[n] - x[n-1]) is a standard DC killer at
-        // 48 kHz (and slightly higher at 96k+, which is acceptable here).
+        // Per-curve one-pole highpass at ~5 Hz:
+        // y[n] = p * (y[n-1] + x[n] - x[n-1]).  The caller supplies the pole
+        // for the rate this curve is evaluated at, because the oversampled
+        // stage runs it at 2x/4x/8x the host rate and a fixed 0.9993 there
+        // would push the corner up to ~40 Hz and strip the low end the curve
+        // is supposed to colour rather than remove.
         const auto index = static_cast<size_t> (juce::jlimit (0, 1, channel));
-        const float hp = asymHpY[index] * 0.9993f + output - asymHpX[index];
+        const float hp = asymHpY[index] * hpCoeff + output - asymHpX[index];
         asymHpX[index] = output;
         asymHpY[index] = hp;
         return hp;
@@ -2227,7 +2238,7 @@ void EonMiniEEFProcessor::resetReverbState() noexcept
     reverbModulationPhase = 0.0;
 }
 
-void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;(void)stepKernel();synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
+void EonMiniEEFProcessor::prepareToPlay(double sr,int samplesPerBlock){sampleRate=sr;updateDcFilterCoefficients();(void)stepKernel();synth->setCurrentPlaybackSampleRate(sr);for(int i=0;i<synth->getNumVoices();++i)dynamic_cast<EonVoice*>(synth->getVoice(i))->setSR(sr);fxDelay.setSize(2,juce::jmax(1,(int)(sr*2.0)),false,true,true);fxDelay.clear();fxWritePosition=0;delayDampL=0.0f;delayDampR=0.0f;configureReverbDelays();resetReverbState();chorusPhase=0;chorusBufferL.fill(0.0f);chorusBufferR.fill(0.0f);chorusWritePosition=0;chorusLfoPhase=0.0;const auto initialiseChorusSmoother=[this,sr](juce::SmoothedValue<float>& smoother,const char* id,float fallback){smoother.reset(sr,0.015);const auto* parameter=apvts.getRawParameterValue(id);smoother.setCurrentAndTargetValue(parameter!=nullptr?parameter->load():fallback);};initialiseChorusSmoother(chorusDepthSmooth,ParamIDs::chorusDepth,0.004f);initialiseChorusSmoother(chorusRateSmooth,ParamIDs::chorusRate,0.25f);initialiseChorusSmoother(chorusMixSmooth,ParamIDs::chorusMix,0.0f);initialiseChorusSmoother(reverbModulationSmooth,ParamIDs::reverbModulation,0.0f);reverbModulationIncrement=0.31/(double)juce::jmax(1.0,sr);dcInput.fill(0.0f);dcOutput.fill(0.0f);resetDriveCurveState();oversamplingBlockSize=juce::jmax(1,samplesPerBlock);oversampling2x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling4x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling8x.initProcessing(static_cast<size_t>(oversamplingBlockSize));oversampling2x.reset();oversampling4x.reset();oversampling8x.reset();fixedLatencySamples=juce::jlimit(1,latencyBufferCapacity-1,juce::roundToInt(juce::jmax(oversampling2x.getLatencyInSamples(),oversampling4x.getLatencyInSamples(),oversampling8x.getLatencyInSamples())));latencyWritePosition=0;for(auto& channel:latencyBuffer)channel.fill(0.0f);setLatencySamples(fixedLatencySamples);}
 bool EonMiniEEFProcessor::isBusesLayoutSupported(const BusesLayout&l)const{const auto in=l.getMainInputChannelSet(),out=l.getMainOutputChannelSet();return in.isDisabled()&&(out==juce::AudioChannelSet::mono()||out==juce::AudioChannelSet::stereo());}
 void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer& m)
 {
@@ -2497,8 +2508,10 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
         {
             float sample = std::isfinite(raw[channel]) ? raw[channel] : 0.0f;
             sample = juce::jlimit(-4.0f, 4.0f, sample);
+            // dcBlockCoeff is re-derived from the session rate in
+            // prepareToPlay; the old fixed 0.995 was a 48 kHz corner.
             const float blocked = sample - dcInput[static_cast<size_t>(channel)]
-                                + 0.995f * dcOutput[static_cast<size_t>(channel)];
+                                + dcBlockCoeff * dcOutput[static_cast<size_t>(channel)];
             dcInput[static_cast<size_t>(channel)] = sample;
             dcOutput[static_cast<size_t>(channel)] = std::isfinite(blocked) ? blocked : 0.0f;
             const float dcBlocked = dcOutput[static_cast<size_t>(channel)];
@@ -2512,7 +2525,8 @@ void EonMiniEEFProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiB
             {
                 const float driven = driveAmount > 1.0e-5f
                     ? applyDriveCurve (dcBlocked, 1.0f + 4.0f * driveAmount,
-                                       selectedDriveCurve(), channel)
+                                       selectedDriveCurve(), channel,
+                                       asymHpCoeff)
                     : dcBlocked;
                 const float saturated = applyAmpSaturation (driven, ampSatAmount);
                 // Preserve exact small-signal dynamics.  Only excursions above
